@@ -1,10 +1,11 @@
+from services import chunking_service
 import threading
 import queue
 import time
 import sys
 import os
 import itertools
-
+import threading
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -221,17 +222,46 @@ class RouterService:
         request_id = next(self.request_counter)
 
         print(f"\n{'='*60}")
-        print(f"[REQUEST {request_id}] START")
+
+        print(
+            f"[THREAD={threading.get_ident()}] "
+            f"[REQUEST {request_id}] START"
+        )
+
         print(f"{'='*60}")
 
-        if not self.processing_lock.acquire(blocking=False):
+        if not self.processing_lock.acquire(timeout=2.0):
 
             print(
                 f"[REQUEST {request_id}] "
-                f"SKIPPED - Previous request still running"
+                f"SKIPPED - Previous request still running (timeout)"
             )
 
             return self._empty_result()
+
+
+        # request_id = next(self.request_counter)
+        
+        # print(
+        #     f"[THREAD={threading.get_ident()}] "
+        #     f"[REQUEST {request_id}] START"
+        # )
+
+        # print(f"\n{'='*60}")
+        # print(
+        #     f"[THREAD={threading.get_ident()}] "
+        #     f"[REQUEST {request_id}] START"
+        # )
+        # print(f"{'='*60}")
+
+        # if not self.processing_lock.acquire(blocking=False):
+
+        #     print(
+        #         f"[REQUEST {request_id}] "
+        #         f"SKIPPED - Previous request still running"
+        #     )
+
+        #     return self._empty_result()
 
         pipeline_start = time.perf_counter()
 
@@ -248,13 +278,112 @@ class RouterService:
             self._flush_stale_audio()
 
             # ── 1. VAD gate ──────────────────────────────────────────────────────
+            vad_start = time.perf_counter()
             # Quick energy check before spending GPU time on Whisper.
             # If the audio array is all near-silence, skip immediately.
-            if isinstance(audio_input, np.ndarray):
+            """if isinstance(audio_input, np.ndarray):
                 rms = float(np.sqrt(np.mean(audio_input ** 2)))
                 if rms < 0.005:
                     print(f"[Pipeline] VAD gate: RMS={rms:.4f} — silence, skipping.")
+                    return self._empty_result()"""
+            if isinstance(audio_input, np.ndarray):
+
+                rms = float(np.sqrt(np.mean(audio_input ** 2)))
+
+                if rms < 0.005:
+
+                    print(
+                        f"[Pipeline] RMS Gate: "
+                        f"RMS={rms:.4f} — silence, skipping."
+                    )
+
                     return self._empty_result()
+
+                print(
+                    f"[Pipeline] RMS Gate Passed "
+                    f"(RMS={rms:.4f})"
+                )
+
+                # Silero VAD verification
+                segments = self.vad_service.get_speech_segments(
+                    audio_input,
+                    return_seconds=False
+                )
+
+                if not segments:
+
+                    print(
+                        "[Pipeline] Silero VAD: "
+                        "No speech detected."
+                    )
+
+                    return self._empty_result()
+
+                print(f"[VAD] Segments={len(segments)}")
+
+                for i, seg in enumerate(segments, 1):
+                    print(
+                        f"[VAD] {i}: "
+                        f"{seg['start']} -> {seg['end']}"
+                    )
+
+                start_idx = segments[0]["start"]
+                end_idx = segments[-1]["end"]
+                speech_audio = audio_input[start_idx:end_idx]
+
+                speech_rms = float(
+                    np.sqrt(np.mean(speech_audio ** 2))
+                )
+
+                print(
+                    f"[VAD] Extracted RMS="
+                    f"{speech_rms:.4f}"
+                )
+                # if not self.vad_service.has_speech(audio_input):
+
+                #     print(
+                #         "[Pipeline] Silero VAD: "
+                #         "No speech detected."
+                #     )
+
+                #     return self._empty_result()
+
+                # speech_audio = self.vad_service.extract_speech_audio(
+                #     audio_input
+                # )
+
+                if len(speech_audio) == 0:
+
+                    print(
+                        "[Pipeline] Speech extraction "
+                        "returned empty audio."
+                    )
+
+                    return self._empty_result()
+
+                original_duration = len(audio_input) / 16000
+                speech_duration = len(speech_audio) / 16000
+
+                print(
+                    f"[Pipeline] Speech Extraction: "
+                    f"{original_duration:.2f}s → "
+                    f"{speech_duration:.2f}s"
+                )
+
+                audio_input = speech_audio
+
+                print(
+                    "[Pipeline] Silero VAD: "
+                    "Speech detected."
+                )
+
+                vad_time = time.perf_counter() - vad_start
+
+                print(
+                    f"[Pipeline] VAD Processing Time: "
+                    f"{vad_time:.3f}s"
+                )
+            
 
             print(
                 f"[QUEUE] TTS Input="
@@ -315,8 +444,33 @@ class RouterService:
             print(f"[Pipeline] Refined   : {refined_text}")
 
             # ── 7. Chunk + queue for TTS ──────────────────────────────────────────
-            chunks = self.chunking_service.split_text_for_tts(refined_text)
-            total  = len(chunks)
+            # chunks = self.chunking_service.split_text_for_tts(refined_text)
+            #total  = len(chunks)
+            ENABLE_TTS = False
+            if ENABLE_TTS:
+                chunks = self.chunking_service.split_text_for_tts(
+                    refined_text
+                )
+                total = len(chunks)
+            else:
+                chunks = []
+                total = 0
+
+            # if ENABLE_TTS:
+            #     chunks = self.chunking_service.split_text_for_tts(refined_text)
+            #     total = len(chunks)
+
+            #     for idx, chunk in enumerate(chunks, start=1):
+            #         self.tts_input_queue.put({
+            #             "text": chunk,
+            #             "chunk_index": idx,
+            #             "total_chunks": total,
+            #         })
+            # else:
+            #     chunks = []
+            #     total = 0
+            
+            
 
             for idx, chunk in enumerate(chunks, start=1):
                 print(f"[Pipeline] Queuing TTS chunk {idx}/{total}: '{chunk}'")
@@ -339,15 +493,16 @@ class RouterService:
             )
 
             return {
-                "raw_text":        raw_text,
-                "cleaned_text":    cleaned_text,
+                "raw_text": raw_text,
+                "cleaned_text": cleaned_text,
                 "punctuated_text": punctuated_text,
                 "translated_text": refined_text,
-                "src_lang":        src_lang,
-                "tgt_lang":        translation_result["tgt_lang"],
-                "chunks":          chunks,
-                "total_chunks":    total,
+                "src_lang": src_lang,
+                "tgt_lang": translation_result["tgt_lang"],
+                "chunks": chunks,
+                "total_chunks": total,
             }
+
         
         finally:
             print(

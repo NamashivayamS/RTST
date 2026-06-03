@@ -40,11 +40,18 @@ class VADService:
 
         wav_tensor = torch.tensor(audio, dtype=torch.float32)
 
-        segments = get_speech_timestamps(
+        """segments = get_speech_timestamps(
             wav_tensor,
             self.model,
             sampling_rate=self.sampling_rate,
             return_seconds=return_seconds
+        )"""
+        segments = get_speech_timestamps(
+            wav_tensor,
+            self.model,
+            sampling_rate=self.sampling_rate,
+            return_seconds=return_seconds,
+            threshold=0.60
         )
 
         return segments

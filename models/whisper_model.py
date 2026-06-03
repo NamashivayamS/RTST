@@ -3,14 +3,14 @@ import torch
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-MODEL_SIZE = "medium"
+MODEL_SIZE = "small"
 
 print(f"\nLoading Faster-Whisper Model ({MODEL_SIZE} on {DEVICE})...")
 
 whisper_model = WhisperModel(
     MODEL_SIZE,
     device=DEVICE,
-    compute_type="float16"   
+    compute_type="float16"
 )
 
 print("Whisper Model Loaded Successfully!")

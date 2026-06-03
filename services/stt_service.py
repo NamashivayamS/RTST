@@ -52,8 +52,8 @@ class STTService:
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
-    # 0.6 is a good balance — catches silence without rejecting quiet speech.
-    NO_SPEECH_THRESHOLD = 0.6
+    # 0.6->0.8 is a good balance — catches silence without rejecting quiet speech.
+    NO_SPEECH_THRESHOLD = 0.75
 
     # If Tamil is detected with less than this confidence AND the language
     # could be confused with a South Indian neighbour, reclassify as Tamil.
@@ -63,7 +63,7 @@ class STTService:
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
 
-    def __init__(self, beam_size: int = 1):
+    def __init__(self, beam_size: int = 5):
         self.model     = whisper_model
         self.beam_size = beam_size
         print("STTService initialized and ready.")
@@ -98,8 +98,8 @@ class STTService:
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # built-in VAD pre-filter (fast, CPU)
             vad_parameters=dict(
-                min_silence_duration_ms=300,
-                speech_pad_ms=100,
+                min_silence_duration_ms=500,
+                speech_pad_ms=200,
             ),
             condition_on_previous_text=False,  # prevents context bleed between chunks
             temperature=0.0,             # greedy — faster, less hallucination
@@ -132,6 +132,11 @@ class STTService:
         # ── Language reclassification ──────────────────────────────────────
         detected_lang = info.language
         lang_prob     = info.language_probability
+        
+        print(
+            f"[STT] Language={detected_lang} "
+            f"Prob={lang_prob:.2%}"
+        )
 
         # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
         # If confidence is low and the confused language is a known neighbour,

@@ -201,11 +201,20 @@ async def websocket_translate(websocket: WebSocket):
                 total_chunks = pipeline_result["total_chunks"]
 
                 if total_chunks == 0:
+                    if pipeline_result["translated_text"]:
+                        await manager.send_json(websocket, {
+                            "type": "subtitle",
+                            "text": pipeline_result["translated_text"],
+                            "src_lang": pipeline_result["src_lang"],
+                            "tgt_lang": pipeline_result["tgt_lang"],
+                        })
+
                     await manager.send_json(websocket, {
                         "type": "done",
                         "total_chunks": 0
                     })
                     continue
+
 
                 # ── 1. Send subtitle immediately ───────────────────────────
                 await manager.send_json(websocket, {
