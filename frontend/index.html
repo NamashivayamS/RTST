@@ -211,10 +211,16 @@
     .subtitle-panel {
       display: flex;
       flex-direction: column;
-      justify-content: flex-end;
       padding: 24px 0 16px;
       gap: 12px;
-      overflow: hidden;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scroll-behavior: smooth;
+    }
+
+    .subtitle-panel::before {
+      content: "";
+      margin-top: auto;
     }
 
     .empty-state {
@@ -990,9 +996,9 @@
     </div>
   `;
 
-      // Keep last 5
+      // Keep last 50
       const all = panel.querySelectorAll('.utterance');
-      if (all.length >= 5) all[0].remove();
+      if (all.length >= 50) all[0].remove();
 
       panel.appendChild(el);
       el.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -1092,10 +1098,11 @@
 
       let silenceMs = 0;
       let isSpeaking = false;
-      
+
       sendInterval = setInterval(() => {
         if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
 
+        // Threshold tuned to ignore ambient fan noise (0.008)
         if (currentRms > 0.008) {
           isSpeaking = true;
           silenceMs = 0;
@@ -1103,22 +1110,29 @@
           silenceMs += 250;
         }
 
+        // PREVENT MEMORY LEAK & HALLUCINATIONS:
+        // Drop the buffer if it gets too large while silent.
+        if (!isSpeaking && bufferDuration > 1000) {
+          pcmBuffer = [];
+          bufferDuration = 0;
+        }
+
         // If user stopped speaking for 1s OR spoke for >12s continuously
         if (isSpeaking && (silenceMs > 1000 || bufferDuration > 12000)) {
           if (awaitingResponse) return; // Wait for backend to finish
-          
+
           if (bufferDuration >= MIN_AUDIO_MS) {
             const total = pcmBuffer.reduce((s, a) => s + a.length, 0);
             const merged = new Float32Array(total);
             let offset = 0;
             for (const c of pcmBuffer) { merged.set(c, offset); offset += c.length; }
 
-            console.log(`[Frontend] Sending utterance: ${(bufferDuration/1000).toFixed(2)}s`);
+            console.log(`[Frontend] Sending utterance: ${(bufferDuration / 1000).toFixed(2)}s`);
             ws.send(merged.buffer);
             awaitingResponse = true;
             infoText.textContent = 'Processing…';
           }
-          
+
           pcmBuffer = [];
           bufferDuration = 0;
           silenceMs = 0;
