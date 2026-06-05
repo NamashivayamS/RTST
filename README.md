@@ -72,8 +72,5 @@ RealTimeSpeechTranslator/
 ## Notes for Windows/Nvidia Users
 PyTorch CUDA context crashes on Windows can occur if CPU and GPU modules aren't imported in a specific order. This project includes safeguards and lazy-loading mechanisms to handle initialization properly and prevent memory leaks and VRAM crashes.
 
-## Contributing
-Contributions are welcome. Please open an issue or submit a pull request if you'd like to improve the project.
-
-## License
-This project is available under standard open-source licenses.
+## NOTE
+This project is under Development.
