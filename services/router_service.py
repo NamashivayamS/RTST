@@ -58,9 +58,6 @@ class RouterService:
         # Valid only for single-user architecture.
         self.cancel_event = threading.Event()
 
-        # Single-user pipeline protection
-        self.processing_lock = threading.Lock()        
-
         self.request_counter = itertools.count(1)
 
         # CPU-bound first — punctuation model must load before Whisper
@@ -229,39 +226,6 @@ class RouterService:
         )
 
         print(f"{'='*60}")
-
-        if not self.processing_lock.acquire(timeout=2.0):
-
-            print(
-                f"[REQUEST {request_id}] "
-                f"SKIPPED - Previous request still running (timeout)"
-            )
-
-            return self._empty_result()
-
-
-        # request_id = next(self.request_counter)
-        
-        # print(
-        #     f"[THREAD={threading.get_ident()}] "
-        #     f"[REQUEST {request_id}] START"
-        # )
-
-        # print(f"\n{'='*60}")
-        # print(
-        #     f"[THREAD={threading.get_ident()}] "
-        #     f"[REQUEST {request_id}] START"
-        # )
-        # print(f"{'='*60}")
-
-        # if not self.processing_lock.acquire(blocking=False):
-
-        #     print(
-        #         f"[REQUEST {request_id}] "
-        #         f"SKIPPED - Previous request still running"
-        #     )
-
-        #     return self._empty_result()
 
         pipeline_start = time.perf_counter()
 
@@ -507,12 +471,6 @@ class RouterService:
         finally:
             print(
                 f"[REQUEST {request_id}] COMPLETE"
-            )
-
-            self.processing_lock.release()
-
-            print(
-                f"[REQUEST {request_id}] LOCK RELEASED"
             )
 
     def process_translation(self, translated_text: str) -> dict:

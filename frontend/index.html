@@ -773,8 +773,6 @@
     // ─────────────────────────────────────────────────────────
     // CONFIG
     // ─────────────────────────────────────────────────────────
-    // Dynamically get the WS URL based on where the HTML is hosted.
-    // If opened as a local file (file://), fallback to localhost:8000
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host || 'localhost:8000';
     const WS_URL = `${protocol}//${host}/ws/translate`;
@@ -794,7 +792,6 @@
     let analyser = null;
     let recording = false;
     let pcmBuffer = [];
-    let bufferDuration = 0;
     let nextMsgIsAudio = false;
     let pendingMeta = null;
     let playbackCtx = null;
@@ -802,10 +799,11 @@
     let playingNodes = 0;
     let activeUtterance = null;
     let ecgAnimId = null;
-    let sendInterval = null;
-    let awaitingResponse = false;
     let pingInterval = null;
     let currentRms = 0;
+
+    let streamInterval = null;
+    let currentChunk   = [];
 
 
     // ECG state
@@ -901,63 +899,35 @@
     }
 
     function handleMsg(msg) {
-      switch (msg.type) {
-        case 'subtitle':
-          createUtterance(msg);
-          setWsStatus('proc', 'translating');
-          infoText.textContent = 'Generating speech…';
-          break;
-
-        case 'audio':
-          pendingMeta = msg;
-          break;
-
-        // case 'done':
-        //   awaitingResponse = false;
-        //   if (!recording) setWsStatus('alive', 'connected');
-        //   infoText.textContent = 'Ready — press to speak';
-        //   if (activeUtterance) {
-        //     activeUtterance.classList.remove('active');
-        //     activeUtterance = null;
-        //   }
-        //   break;
-
-        case 'done':
-
-          awaitingResponse = false;
-
-          if (!recording) {
-
-            setWsStatus('alive', 'connected');
-
-            infoText.textContent =
-              'Ready — press to speak';
-
-          } else {
-
-            setWsStatus('rec', 'listening');
-
-            infoText.textContent =
-              'Listening...';
-
-          }
-
-          if (activeUtterance) {
-            activeUtterance.classList.remove('active');
-            activeUtterance = null;
-          }
-
-          break;
-
-        case 'error':
-          awaitingResponse = false;
-          showToast(msg.message || 'Server error');
-          if (!recording) setWsStatus('alive', 'connected');
-          break;
-
-        case 'pong':
-          break;
-      }
+        switch (msg.type) {
+            case 'subtitle':
+                createUtterance(msg);
+                setWsStatus('proc', 'translating');
+                infoText.textContent = 'Translating…';
+                break;
+            case 'audio':
+                pendingMeta = msg;
+                break;
+            case 'done':
+                if (recording) {
+                    setWsStatus('rec', 'listening');
+                    infoText.textContent = 'Listening…';
+                } else {
+                    setWsStatus('alive', 'connected');
+                    infoText.textContent = 'Ready — press to speak';
+                }
+                if (activeUtterance) {
+                    activeUtterance.classList.remove('active');
+                    activeUtterance = null;
+                }
+                break;
+            case 'error':
+                showToast(msg.message || 'Server error');
+                if (!recording) setWsStatus('alive', 'connected');
+                break;
+            case 'pong':
+                break;
+        }
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1070,128 +1040,77 @@
     // MICROPHONE CAPTURE
     // ─────────────────────────────────────────────────────────
     async function startRecording() {
-      if (recording) return;
-      awaitingResponse = false;
+        if (recording) return;
 
-      try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch {
-        showToast('Microphone access denied — check browser permissions');
-        return;
-      }
-
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-      const source = audioCtx.createMediaStreamSource(mediaStream);
-
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.5;
-      source.connect(analyser);
-
-      // ScriptProcessor is deprecated but required for file:// protocol compatibility
-      // since AudioWorklet will trigger CORS errors when opened locally.
-      processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      source.connect(processor);
-      processor.connect(audioCtx.destination);
-
-      processor.onaudioprocess = (e) => {
-        const samples = e.inputBuffer.getChannelData(0);
-        pcmBuffer.push(new Float32Array(samples));
-        bufferDuration += (samples.length / SAMPLE_RATE) * 1000;
-      };
-
-      let silenceMs = 0;
-      let isSpeaking = false;
-
-      sendInterval = setInterval(() => {
-        if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
-
-        // Threshold tuned to ignore ambient fan noise (0.008)
-        if (currentRms > 0.020) {  //Higher the noise, higher the threshold #0.008 
-          isSpeaking = true;
-          silenceMs = 0;
-        } else {
-          silenceMs += 250;
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch {
+            showToast('Microphone access denied — check browser permissions');
+            return;
         }
 
-        // PREVENT MEMORY LEAK & HALLUCINATIONS:
-        // Drop the buffer if it gets too large while silent.
-        if (!isSpeaking && bufferDuration > 1000) {
-          pcmBuffer = [];
-          bufferDuration = 0;
-        }
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+        const source = audioCtx.createMediaStreamSource(mediaStream);
 
-        // If user stopped speaking for 1s OR spoke for >12s continuously
-        if (isSpeaking && (silenceMs > 1000 || bufferDuration > 12000)) {
-          if (awaitingResponse) return; // Wait for backend to finish
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.5;
+        source.connect(analyser);
 
-          if (bufferDuration >= MIN_AUDIO_MS) {
-            const total = pcmBuffer.reduce((s, a) => s + a.length, 0);
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+
+        // Just accumulate — no silence detection, no buffering logic
+        processor.onaudioprocess = (e) => {
+            const samples = e.inputBuffer.getChannelData(0);
+            currentChunk.push(new Float32Array(samples));
+        };
+
+        // Send every 250ms unconditionally — backend VAD decides utterance boundaries
+        streamInterval = setInterval(() => {
+            if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (currentChunk.length === 0) return;
+
+            const total  = currentChunk.reduce((s, a) => s + a.length, 0);
             const merged = new Float32Array(total);
-            let offset = 0;
-            for (const c of pcmBuffer) { merged.set(c, offset); offset += c.length; }
+            let offset   = 0;
+            for (const c of currentChunk) { merged.set(c, offset); offset += c.length; }
+            currentChunk = [];
 
-            console.log(`[Frontend] Sending utterance: ${(bufferDuration / 1000).toFixed(2)}s`);
             ws.send(merged.buffer);
-            awaitingResponse = true;
-            infoText.textContent = 'Processing…';
-          }
+        }, 250);
 
-          pcmBuffer = [];
-          bufferDuration = 0;
-          silenceMs = 0;
-          isSpeaking = false;
-        }
-      }, 250);
+        recording = true;
+        btnRecord.classList.add('recording');
+        btnIcon.textContent = '⏹';
+        setWsStatus('rec', 'listening');
+        infoText.textContent = 'Listening…';
+        infoSub.textContent = 'Speak naturally · Tamil or English';
 
-      recording = true;
-      btnRecord.classList.add('recording');
-      btnIcon.textContent = '⏹';
-      setWsStatus('rec', 'listening');
-      infoText.textContent = 'Listening…';
-      infoSub.textContent = 'Speak clearly · Tamil or English';
-
-      startEcg();
+        startEcg();
     }
 
     function stopRecording() {
-      if (!recording) return;
-      recording = false;
+        if (!recording) return;
+        recording = false;
 
-      clearInterval(sendInterval);
-      sendInterval = null;
+        clearInterval(streamInterval);
+        streamInterval = null;
+        currentChunk   = [];
 
-      // Flush remaining buffer
-      if (pcmBuffer.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-        const total = pcmBuffer.reduce((s, a) => s + a.length, 0);
-        const merged = new Float32Array(total);
-        let offset = 0;
-        for (const c of pcmBuffer) { merged.set(c, offset); offset += c.length; }
-        if (
-          !awaitingResponse &&
-          ws &&
-          ws.readyState === WebSocket.OPEN &&
-          (total / SAMPLE_RATE) * 1000 >= MIN_AUDIO_MS
-        ) {
-          ws.send(merged.buffer);
-          awaitingResponse = true;
-        }
-      }
-      pcmBuffer = [];
-      bufferDuration = 0;
+        if (processor)    { processor.disconnect();  processor    = null; }
+        if (analyser)     { analyser.disconnect();   analyser     = null; }
+        if (audioCtx)     { audioCtx.close();        audioCtx     = null; }
+        if (mediaStream)  { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
 
-      if (processor) { processor.disconnect(); processor = null; }
-      if (analyser) { analyser.disconnect(); analyser = null; }
-      if (audioCtx) { audioCtx.close(); audioCtx = null; }
-      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+        btnRecord.classList.remove('recording');
+        btnIcon.textContent = '🎤';
+        setWsStatus('alive', 'connected');
+        infoText.textContent = 'Ready — press to speak';
+        infoSub.textContent = 'Auto-detects Tamil or English · 16 kHz PCM';
 
-      btnRecord.classList.remove('recording');
-      btnIcon.textContent = '🎤';
-      setWsStatus('alive', 'connected');
-      infoText.textContent = 'Processing speech…';
-      infoSub.textContent = 'Auto-detects Tamil or English · 16 kHz PCM';
-
-      stopEcg();
+        stopEcg();
     }
 
     // ─────────────────────────────────────────────────────────

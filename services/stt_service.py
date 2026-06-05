@@ -52,11 +52,11 @@ class STTService:
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
-    NO_SPEECH_THRESHOLD = 0.75   # lower the number --> More Drop the audio #0.55 for noisy auditorium
+    NO_SPEECH_THRESHOLD = 0.95   # lower the number --> More Drop the audio #0.55 for noisy auditorium
 
     # If Tamil is detected with less than this confidence AND the language
     # could be confused with a South Indian neighbour, reclassify as Tamil.
-    LANG_CONFIDENCE_THRESHOLD = 0.75
+    LANG_CONFIDENCE_THRESHOLD = 0.90
 
     # Tanglish detection: fraction of words that appear to be English
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
