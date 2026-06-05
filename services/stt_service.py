@@ -62,7 +62,7 @@ class STTService:
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
 
-    def __init__(self, beam_size: int = 5):
+    def __init__(self, beam_size: int = 1):
         self.model     = whisper_model
         self.beam_size = beam_size
         print("STTService initialized and ready.")

@@ -58,7 +58,7 @@ class ConnectionState:
         self._ring   = collections.deque(maxlen=maxlen)
         self._total  = 0          # total samples ever pushed
         self._utt_start = 0       # sample index where current utterance began
-        self.is_processing = False
+        self.active_tasks = 0
         self.was_speaking  = False
         self.silence_samples = 0
 
@@ -183,13 +183,12 @@ async def websocket_translate(websocket: WebSocket):
                     state.was_speaking = False
 
                     if (
-                        not state.is_processing
-                        and state.utterance_length >= MIN_SPEECH_SAMPLES
+                        state.utterance_length >= MIN_SPEECH_SAMPLES
                         and state.silence_samples >= SILENCE_SAMPLES
                     ):
                         utterance = state.get_utterance()
                         state.mark_utterance_start()  # reset for next utterance
-                        state.is_processing = True
+                        state.active_tasks += 1
 
                         # Fire and forget — receive loop keeps running immediately
                         asyncio.create_task(
@@ -274,4 +273,4 @@ async def _run_pipeline(
         except Exception:
             pass
     finally:
-        state.is_processing = False
+        state.active_tasks = max(0, state.active_tasks - 1)
