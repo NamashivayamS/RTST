@@ -244,13 +244,14 @@ if __name__ == "__main__":
 FILE: services\router_service.py
 ============================================================
 
+from services import chunking_service
 import threading
 import queue
 import time
 import sys
 import os
 import itertools
-
+import threading
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -467,17 +468,46 @@ class RouterService:
         request_id = next(self.request_counter)
 
         print(f"\n{'='*60}")
-        print(f"[REQUEST {request_id}] START")
+
+        print(
+            f"[THREAD={threading.get_ident()}] "
+            f"[REQUEST {request_id}] START"
+        )
+
         print(f"{'='*60}")
 
-        if not self.processing_lock.acquire(blocking=False):
+        if not self.processing_lock.acquire(timeout=2.0):
 
             print(
                 f"[REQUEST {request_id}] "
-                f"SKIPPED - Previous request still running"
+                f"SKIPPED - Previous request still running (timeout)"
             )
 
             return self._empty_result()
+
+
+        # request_id = next(self.request_counter)
+        
+        # print(
+        #     f"[THREAD={threading.get_ident()}] "
+        #     f"[REQUEST {request_id}] START"
+        # )
+
+        # print(f"\n{'='*60}")
+        # print(
+        #     f"[THREAD={threading.get_ident()}] "
+        #     f"[REQUEST {request_id}] START"
+        # )
+        # print(f"{'='*60}")
+
+        # if not self.processing_lock.acquire(blocking=False):
+
+        #     print(
+        #         f"[REQUEST {request_id}] "
+        #         f"SKIPPED - Previous request still running"
+        #     )
+
+        #     return self._empty_result()
 
         pipeline_start = time.perf_counter()
 
@@ -494,13 +524,112 @@ class RouterService:
             self._flush_stale_audio()
 
             # ── 1. VAD gate ──────────────────────────────────────────────────────
+            vad_start = time.perf_counter()
             # Quick energy check before spending GPU time on Whisper.
             # If the audio array is all near-silence, skip immediately.
-            if isinstance(audio_input, np.ndarray):
+            """if isinstance(audio_input, np.ndarray):
                 rms = float(np.sqrt(np.mean(audio_input ** 2)))
                 if rms < 0.005:
                     print(f"[Pipeline] VAD gate: RMS={rms:.4f} — silence, skipping.")
+                    return self._empty_result()"""
+            if isinstance(audio_input, np.ndarray):
+
+                rms = float(np.sqrt(np.mean(audio_input ** 2)))
+
+                if rms < 0.005:
+
+                    print(
+                        f"[Pipeline] RMS Gate: "
+                        f"RMS={rms:.4f} — silence, skipping."
+                    )
+
                     return self._empty_result()
+
+                print(
+                    f"[Pipeline] RMS Gate Passed "
+                    f"(RMS={rms:.4f})"
+                )
+
+                # Silero VAD verification
+                segments = self.vad_service.get_speech_segments(
+                    audio_input,
+                    return_seconds=False
+                )
+
+                if not segments:
+
+                    print(
+                        "[Pipeline] Silero VAD: "
+                        "No speech detected."
+                    )
+
+                    return self._empty_result()
+
+                print(f"[VAD] Segments={len(segments)}")
+
+                for i, seg in enumerate(segments, 1):
+                    print(
+                        f"[VAD] {i}: "
+                        f"{seg['start']} -> {seg['end']}"
+                    )
+
+                start_idx = segments[0]["start"]
+                end_idx = segments[-1]["end"]
+                speech_audio = audio_input[start_idx:end_idx]
+
+                speech_rms = float(
+                    np.sqrt(np.mean(speech_audio ** 2))
+                )
+
+                print(
+                    f"[VAD] Extracted RMS="
+                    f"{speech_rms:.4f}"
+                )
+                # if not self.vad_service.has_speech(audio_input):
+
+                #     print(
+                #         "[Pipeline] Silero VAD: "
+                #         "No speech detected."
+                #     )
+
+                #     return self._empty_result()
+
+                # speech_audio = self.vad_service.extract_speech_audio(
+                #     audio_input
+                # )
+
+                if len(speech_audio) == 0:
+
+                    print(
+                        "[Pipeline] Speech extraction "
+                        "returned empty audio."
+                    )
+
+                    return self._empty_result()
+
+                original_duration = len(audio_input) / 16000
+                speech_duration = len(speech_audio) / 16000
+
+                print(
+                    f"[Pipeline] Speech Extraction: "
+                    f"{original_duration:.2f}s → "
+                    f"{speech_duration:.2f}s"
+                )
+
+                audio_input = speech_audio
+
+                print(
+                    "[Pipeline] Silero VAD: "
+                    "Speech detected."
+                )
+
+                vad_time = time.perf_counter() - vad_start
+
+                print(
+                    f"[Pipeline] VAD Processing Time: "
+                    f"{vad_time:.3f}s"
+                )
+            
 
             print(
                 f"[QUEUE] TTS Input="
@@ -561,8 +690,33 @@ class RouterService:
             print(f"[Pipeline] Refined   : {refined_text}")
 
             # ── 7. Chunk + queue for TTS ──────────────────────────────────────────
-            chunks = self.chunking_service.split_text_for_tts(refined_text)
-            total  = len(chunks)
+            # chunks = self.chunking_service.split_text_for_tts(refined_text)
+            #total  = len(chunks)
+            ENABLE_TTS = False
+            if ENABLE_TTS:
+                chunks = self.chunking_service.split_text_for_tts(
+                    refined_text
+                )
+                total = len(chunks)
+            else:
+                chunks = []
+                total = 0
+
+            # if ENABLE_TTS:
+            #     chunks = self.chunking_service.split_text_for_tts(refined_text)
+            #     total = len(chunks)
+
+            #     for idx, chunk in enumerate(chunks, start=1):
+            #         self.tts_input_queue.put({
+            #             "text": chunk,
+            #             "chunk_index": idx,
+            #             "total_chunks": total,
+            #         })
+            # else:
+            #     chunks = []
+            #     total = 0
+            
+            
 
             for idx, chunk in enumerate(chunks, start=1):
                 print(f"[Pipeline] Queuing TTS chunk {idx}/{total}: '{chunk}'")
@@ -585,15 +739,16 @@ class RouterService:
             )
 
             return {
-                "raw_text":        raw_text,
-                "cleaned_text":    cleaned_text,
+                "raw_text": raw_text,
+                "cleaned_text": cleaned_text,
                 "punctuated_text": punctuated_text,
                 "translated_text": refined_text,
-                "src_lang":        src_lang,
-                "tgt_lang":        translation_result["tgt_lang"],
-                "chunks":          chunks,
-                "total_chunks":    total,
+                "src_lang": src_lang,
+                "tgt_lang": translation_result["tgt_lang"],
+                "chunks": chunks,
+                "total_chunks": total,
             }
+
         
         finally:
             print(
@@ -759,8 +914,7 @@ class STTService:
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
-    # 0.6 is a good balance — catches silence without rejecting quiet speech.
-    NO_SPEECH_THRESHOLD = 0.6
+    NO_SPEECH_THRESHOLD = 0.75   # lower the number --> More Drop the audio #0.55 for noisy auditorium
 
     # If Tamil is detected with less than this confidence AND the language
     # could be confused with a South Indian neighbour, reclassify as Tamil.
@@ -770,7 +924,7 @@ class STTService:
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
 
-    def __init__(self, beam_size: int = 1):
+    def __init__(self, beam_size: int = 5):
         self.model     = whisper_model
         self.beam_size = beam_size
         print("STTService initialized and ready.")
@@ -802,11 +956,14 @@ class STTService:
             audio_input,
             beam_size=self.beam_size,
             language=language,
+            # Provide context to bias the model heavily toward Tamil and English.
+            # This drastically improves language detection on very short sentences.
+            initial_prompt="வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you?",
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # built-in VAD pre-filter (fast, CPU)
             vad_parameters=dict(
-                min_silence_duration_ms=300,
-                speech_pad_ms=100,
+                min_silence_duration_ms=500,
+                speech_pad_ms=200,
             ),
             condition_on_previous_text=False,  # prevents context bleed between chunks
             temperature=0.0,             # greedy — faster, less hallucination
@@ -839,6 +996,11 @@ class STTService:
         # ── Language reclassification ──────────────────────────────────────
         detected_lang = info.language
         lang_prob     = info.language_probability
+        
+        print(
+            f"[STT] Language={detected_lang} "
+            f"Prob={lang_prob:.2%}"
+        )
 
         # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
         # If confidence is low and the confused language is a known neighbour,
@@ -859,11 +1021,18 @@ class STTService:
             print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
             detected_lang = "en"
 
-        # ── Tanglish detection ─────────────────────────────────────────────
+        # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False
         if detected_lang == "ta":
-            is_tanglish = self._detect_tanglish(full_text)
-            if is_tanglish:
+            latin_ratio = self._get_latin_ratio(full_text)
+            
+            # If the text is almost entirely English (e.g. >90%), Whisper's LID 
+            # made a mistake (biased by our prompt). Force it to English.
+            if latin_ratio > 0.90:
+                print(f"[STT] Reclassifying 'ta' → 'en' (Transcription is 100% English)")
+                detected_lang = "en"
+            elif latin_ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD:
+                is_tanglish = True
                 print(f"[STT] Tanglish detected in: '{full_text}'")
 
         indictrans_lang = WHISPER_LANG_TO_INDICTRANS.get(detected_lang)
@@ -886,24 +1055,19 @@ class STTService:
     # Tanglish detection
     # ──────────────────────────────────────────────────────────────────────
 
-    def _detect_tanglish(self, text: str) -> bool:
+    def _get_latin_ratio(self, text: str) -> float:
         """
-        Returns True if the text appears to be code-switched Tamil+English.
-
-        Strategy: count the ratio of Latin-script words to total words.
-        A ratio above TANGLISH_ENGLISH_RATIO_THRESHOLD in a Tamil-detected
-        utterance signals Tanglish.
+        Returns the ratio of Latin-script words to total words.
         """
         words = text.split()
         if not words:
-            return False
+            return 0.0
 
         latin_words = sum(
             1 for w in words
             if re.match(r"^[a-zA-Z]+$", w.strip(".,!?;:"))
         )
-        ratio = latin_words / len(words)
-        return ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD
+        return latin_words / len(words)
 
     # ──────────────────────────────────────────────────────────────────────
     # Helpers
@@ -1189,11 +1353,18 @@ class VADService:
 
         wav_tensor = torch.tensor(audio, dtype=torch.float32)
 
-        segments = get_speech_timestamps(
+        """segments = get_speech_timestamps(
             wav_tensor,
             self.model,
             sampling_rate=self.sampling_rate,
             return_seconds=return_seconds
+        )"""
+        segments = get_speech_timestamps(
+            wav_tensor,
+            self.model,
+            sampling_rate=self.sampling_rate,
+            return_seconds=return_seconds,
+            threshold=0.60
         )
 
         return segments

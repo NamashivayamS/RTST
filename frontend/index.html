@@ -773,7 +773,11 @@
     // ─────────────────────────────────────────────────────────
     // CONFIG
     // ─────────────────────────────────────────────────────────
-    const WS_URL = 'ws://localhost:8000/ws/translate';
+    // Dynamically get the WS URL based on where the HTML is hosted.
+    // If opened as a local file (file://), fallback to localhost:8000
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host || 'localhost:8000';
+    const WS_URL = `${protocol}//${host}/ws/translate`;
     const SAMPLE_RATE = 16000;
     //const CHUNK_MS 
     const CHUNK_MS = 2000;
@@ -1103,7 +1107,7 @@
         if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
 
         // Threshold tuned to ignore ambient fan noise (0.008)
-        if (currentRms > 0.008) {
+        if (currentRms > 0.020) {  //Higher the noise, higher the threshold #0.008 
           isSpeaking = true;
           silenceMs = 0;
         } else {

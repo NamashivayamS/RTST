@@ -52,8 +52,7 @@ class STTService:
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
-    # 0.6->0.8 is a good balance — catches silence without rejecting quiet speech.
-    NO_SPEECH_THRESHOLD = 0.75
+    NO_SPEECH_THRESHOLD = 0.75   # lower the number --> More Drop the audio #0.55 for noisy auditorium
 
     # If Tamil is detected with less than this confidence AND the language
     # could be confused with a South Indian neighbour, reclassify as Tamil.
@@ -95,6 +94,9 @@ class STTService:
             audio_input,
             beam_size=self.beam_size,
             language=language,
+            # Provide context to bias the model heavily toward Tamil and English.
+            # This drastically improves language detection on very short sentences.
+            initial_prompt="வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you?",
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # built-in VAD pre-filter (fast, CPU)
             vad_parameters=dict(
@@ -157,11 +159,18 @@ class STTService:
             print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
             detected_lang = "en"
 
-        # ── Tanglish detection ─────────────────────────────────────────────
+        # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False
         if detected_lang == "ta":
-            is_tanglish = self._detect_tanglish(full_text)
-            if is_tanglish:
+            latin_ratio = self._get_latin_ratio(full_text)
+            
+            # If the text is almost entirely English (e.g. >90%), Whisper's LID 
+            # made a mistake (biased by our prompt). Force it to English.
+            if latin_ratio > 0.90:
+                print(f"[STT] Reclassifying 'ta' → 'en' (Transcription is 100% English)")
+                detected_lang = "en"
+            elif latin_ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD:
+                is_tanglish = True
                 print(f"[STT] Tanglish detected in: '{full_text}'")
 
         indictrans_lang = WHISPER_LANG_TO_INDICTRANS.get(detected_lang)
@@ -184,24 +193,19 @@ class STTService:
     # Tanglish detection
     # ──────────────────────────────────────────────────────────────────────
 
-    def _detect_tanglish(self, text: str) -> bool:
+    def _get_latin_ratio(self, text: str) -> float:
         """
-        Returns True if the text appears to be code-switched Tamil+English.
-
-        Strategy: count the ratio of Latin-script words to total words.
-        A ratio above TANGLISH_ENGLISH_RATIO_THRESHOLD in a Tamil-detected
-        utterance signals Tanglish.
+        Returns the ratio of Latin-script words to total words.
         """
         words = text.split()
         if not words:
-            return False
+            return 0.0
 
         latin_words = sum(
             1 for w in words
             if re.match(r"^[a-zA-Z]+$", w.strip(".,!?;:"))
         )
-        ratio = latin_words / len(words)
-        return ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD
+        return latin_words / len(words)
 
     # ──────────────────────────────────────────────────────────────────────
     # Helpers
