@@ -207,6 +207,18 @@
       }
     }
 
+    .lang-select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 4px 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+
     /* ── Subtitle panel ── */
     .subtitle-panel {
       display: flex;
@@ -708,6 +720,13 @@
         <div class="tagline">Tamil ↔ English · Real-Time Neural Translation</div>
       </div>
       <div class="header-stats">
+        <select id="targetLang" class="lang-select">
+          <option value="ta" selected>Tamil</option>
+          <option value="hi">Hindi</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+        </select>
         <div class="stat-pill">
           <div class="dot" id="wsDot"></div>
           <span id="wsStatus">disconnected</span>
@@ -816,6 +835,7 @@
     let ecgPhase = 0;    // for flatline animation when silent
 
     // DOM refs
+    const targetLang = document.getElementById('targetLang');
     const wsDot = document.getElementById('wsDot');
     const wsStatus = document.getElementById('wsStatus');
     const modelPill = document.getElementById('modelPill');
@@ -862,6 +882,15 @@
         setWsStatus('alive', 'connected');
         modelPill.style.display = 'flex';
         infoText.textContent = 'Ready — press to speak';
+        
+        ws.send(JSON.stringify({ action: 'config', target_lang: targetLang.value }));
+        
+        targetLang.addEventListener('change', () => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'config', target_lang: targetLang.value }));
+          }
+        });
+
         if (pingInterval) clearInterval(pingInterval);
         pingInterval = setInterval(() => {
           if (ws?.readyState === WebSocket.OPEN) {

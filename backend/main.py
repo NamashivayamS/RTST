@@ -43,12 +43,14 @@ app.add_middleware(
 
 manager = ConnectionManager()
 router: RouterService | None = None
+gpu_lock: asyncio.Lock | None = None
 
 # ── Streaming constants ────────────────────────────────────────────────────────
 SAMPLE_RATE        = 16000
 RING_BUFFER_SEC    = 30                          # how much audio to keep
 SILENCE_SAMPLES    = int(SAMPLE_RATE * 0.6)      # 600ms — fire sooner after pause
 MIN_SPEECH_SAMPLES = int(SAMPLE_RATE * 0.5)      # 500ms — allow shorter phrases
+MAX_SPEECH_SAMPLES = int(SAMPLE_RATE * 7.0)      # 7s — force chunking
 
 
 # ── Per-connection state ───────────────────────────────────────────────────────
@@ -61,6 +63,7 @@ class ConnectionState:
         self.active_tasks = 0
         self.was_speaking  = False
         self.silence_samples = 0
+        self.target_lang = "ta"
 
     def push(self, chunk: np.ndarray):
         self._ring.extend(chunk.tolist())
@@ -87,8 +90,10 @@ class ConnectionState:
 @app.on_event("startup")
 async def startup_event():
     global router
+    global gpu_lock
     if router is not None:
         return
+    gpu_lock = asyncio.Lock()
     print("[Backend] Loading pipeline models...")
     loop = asyncio.get_event_loop()
     router = await loop.run_in_executor(None, RouterService)
@@ -139,7 +144,6 @@ async def websocket_translate(websocket: WebSocket):
             if message.get("type") == "websocket.disconnect":
                 break
 
-            # ── Ping / control ─────────────────────────────────────────────
             if "text" in message:
                 try:
                     ctrl = json.loads(message["text"])
@@ -147,6 +151,8 @@ async def websocket_translate(websocket: WebSocket):
                     continue
                 if ctrl.get("action") == "ping":
                     await manager.send_json(websocket, {"type": "pong"})
+                elif ctrl.get("action") == "config":
+                    state.target_lang = ctrl.get("target_lang", "ta")
                 continue
 
             # ── 250ms audio chunk ──────────────────────────────────────────
@@ -175,6 +181,16 @@ async def websocket_translate(websocket: WebSocket):
                     state.mark_utterance_start()
                     state.was_speaking = True
                 state.silence_samples = 0
+
+                if state.utterance_length >= MAX_SPEECH_SAMPLES:
+                    utterance = state.get_utterance()
+                    state.mark_utterance_start()  # reset for next utterance
+                    state.active_tasks += 1
+
+                    # Fire and forget — receive loop keeps running immediately
+                    asyncio.create_task(
+                        _run_pipeline(websocket, utterance, state, loop)
+                    )
             else:
                 state.silence_samples += len(chunk)
 
@@ -217,10 +233,10 @@ async def _run_pipeline(
     """
     try:
         print(f"[Pipeline Task] Utterance duration: {len(audio)/SAMPLE_RATE:.2f}s")
-        state.mark_utterance_start()
-        result = await loop.run_in_executor(
-            None, router.process_audio, audio
-        )
+        async with gpu_lock:
+            result = await loop.run_in_executor(
+                None, lambda: router.process_audio(audio, target_lang=state.target_lang)
+            )
 
         if not result.get("translated_text"):
             return

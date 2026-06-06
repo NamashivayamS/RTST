@@ -11,11 +11,15 @@ from models.whisper_model import whisper_model
 WHISPER_LANG_TO_INDICTRANS = {
     "ta": "tam_Taml",
     "en": "eng_Latn",
+    "hi": "hin_Deva",
+    "te": "tel_Telu",
+    "kn": "kan_Knda",
+    "ml": "mal_Mlym",
 }
 
 # Whisper sometimes misidentifies Tamil as these languages.
-# When this happens AND confidence is low, we reclassify as Tamil.
-TAMIL_CONFUSED_AS = {"ml", "kn", "te", "hi"}
+# Since we now support them, we no longer force reclassification.
+TAMIL_CONFUSED_AS = set()
 
 # Hallucination phrases Whisper emits for near-silence in Tamil context.
 # If the full transcription matches one of these, treat it as empty.
@@ -94,8 +98,8 @@ class STTService:
             audio_input,
             beam_size=self.beam_size,
             language=language,
-            # Provide context to bias the model heavily toward Tamil and English.
-            # This drastically improves language detection on very short sentences.
+            # Provide context to bias the model toward Tamil and English evenly.
+            # This helps language detection on very short sentences for both languages.
             initial_prompt="வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you?",
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # built-in VAD pre-filter (fast, CPU)
@@ -104,7 +108,9 @@ class STTService:
                 speech_pad_ms=200,
             ),
             condition_on_previous_text=False,  # prevents context bleed between chunks
-            temperature=0.0,             # greedy — faster, less hallucination
+            # Removing temperature=0.0 allows Whisper to use its default fallback temperatures 
+            # [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]. If greedy decoding (0.0) fails on Tamil grammar, 
+            # it will automatically retry, drastically improving accuracy on complex sentences.
         )
 
         segments = list(segments_gen)
@@ -141,18 +147,8 @@ class STTService:
         )
 
         # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
-        # If confidence is low and the confused language is a known neighbour,
-        # reclassify as Tamil. This is safe because our pipeline only handles
-        # ta and en — anything else gets reclassified to the closer match.
-        if (
-            detected_lang in TAMIL_CONFUSED_AS
-            and lang_prob < self.LANG_CONFIDENCE_THRESHOLD
-        ):
-            print(
-                f"[STT] Reclassifying '{detected_lang}' ({lang_prob:.2%}) → 'ta' "
-                f"(low-confidence South Indian language)"
-            )
-            detected_lang = "ta"
+        # Since we now support these languages fully, we accept Whisper's detection
+        # unless it's a completely unsupported language.
 
         # If language is still unsupported (e.g. 'fr', 'zh'), fall back to English
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:

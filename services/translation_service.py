@@ -8,12 +8,24 @@ from IndicTransToolkit.processor import IndicProcessor
 
 MODEL_REGISTRY = {
     "eng_Latn→tam_Taml": "ai4bharat/indictrans2-en-indic-dist-200M",
+    "eng_Latn→hin_Deva": "ai4bharat/indictrans2-en-indic-dist-200M",
+    "eng_Latn→tel_Telu": "ai4bharat/indictrans2-en-indic-dist-200M",
+    "eng_Latn→kan_Knda": "ai4bharat/indictrans2-en-indic-dist-200M",
+    "eng_Latn→mal_Mlym": "ai4bharat/indictrans2-en-indic-dist-200M",
     "tam_Taml→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
+    "hin_Deva→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
+    "tel_Telu→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
+    "kan_Knda→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
+    "mal_Mlym→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
 }
 
 LANG_CODE_MAP = {
     "en": "eng_Latn",
     "ta": "tam_Taml",
+    "hi": "hin_Deva",
+    "te": "tel_Telu",
+    "kn": "kan_Knda",
+    "ml": "mal_Mlym",
 }
 
 DEFAULT_TARGET_MAP = {
@@ -124,7 +136,7 @@ class TranslationService:
 
         return self.ip.postprocess_batch(decoded, lang=tgt_lang)
 
-    def translate_auto(self, text: str, detected_language: str) -> dict:
+    def translate_auto(self, text: str, detected_language: str, target_language: str | None = None) -> dict:
         """
         Main pipeline entry point. Accepts Whisper ISO 639-1 code,
         routes to correct direction automatically.
@@ -135,7 +147,14 @@ class TranslationService:
                 f"Unsupported language='{detected_language}'. "
                 f"Supported: {list(LANG_CODE_MAP.keys())}"
             )
-        tgt_lang = DEFAULT_TARGET_MAP[src_lang]
+            
+        if detected_language == "en":
+            # If English is spoken, translate TO the target language from the UI dropdown
+            tgt_lang = LANG_CODE_MAP.get(target_language, "tam_Taml")
+        else:
+            # If an Indic language is spoken, always translate TO English
+            tgt_lang = "eng_Latn"
+            
         translated = self.translate(text, src_lang, tgt_lang)
         return {
             "translated_text": translated,

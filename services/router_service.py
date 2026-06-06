@@ -208,7 +208,7 @@ class RouterService:
     # Main pipeline entry point
     # ──────────────────────────────────────────────────────────────────────────
 
-    def process_audio(self, audio_input, language: str | None = None) -> dict:
+    def process_audio(self, audio_input, target_lang: str = "ta", language: str | None = None) -> dict:
         """
         Full pipeline: raw audio array (float32, 16kHz) → subtitles + TTS queue.
 
@@ -398,7 +398,8 @@ class RouterService:
             translation_start = time.perf_counter()
             translation_result = self.translation_service.translate_auto(
                 punctuated_text,
-                detected_language=src_lang
+                detected_language=src_lang,
+                target_language=target_lang
             )
             translation_time = time.perf_counter() - translation_start
             print(f"[Pipeline] Translated: {translation_result['translated_text']}")
