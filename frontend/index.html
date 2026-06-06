@@ -979,8 +979,17 @@
 
       if (activeUtterance) activeUtterance.classList.remove('active');
 
-      const isTA = msg.tgt_lang && msg.tgt_lang.startsWith('tam');
-      const lang = isTA ? 'ta' : 'en';
+      let tgtIso = 'en';
+      if (msg.tgt_lang) {
+          if (msg.tgt_lang.startsWith('tam')) tgtIso = 'ta';
+          else if (msg.tgt_lang.startsWith('hin')) tgtIso = 'hi';
+          else if (msg.tgt_lang.startsWith('tel')) tgtIso = 'te';
+          else if (msg.tgt_lang.startsWith('kan')) tgtIso = 'kn';
+          else if (msg.tgt_lang.startsWith('mal')) tgtIso = 'ml';
+          else if (msg.tgt_lang.startsWith('eng')) tgtIso = 'en';
+      }
+
+      const lang = tgtIso;
       const srcCode = (msg.src_lang || '??').toUpperCase();
       const tgtCode = lang.toUpperCase();
       const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
