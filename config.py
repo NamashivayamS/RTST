@@ -1,28 +1,19 @@
+# config.py
 """
-config.py — Project-wide path constants.
-
-Import from here instead of hardcoding absolute paths in test or service files.
-All paths are resolved relative to this file's location (the project root),
-so they work on any machine regardless of where the project is cloned.
-
-Usage:
-    from config import PROJECT_ROOT, REF_AUDIO_PATH, AUDIO_SAMPLES_DIR
+Central configuration for all tunable thresholds and logic gates.
 """
 
-import os
+# ── Streaming / VAD thresholds ────────────────────────────────────────────────
+SAMPLE_RATE          = 16000
+VAD_SILENCE_SEC      = 0.4    # seconds of silence before utterance fires
+VAD_MIN_SPEECH_SEC   = 0.35   # minimum utterance length to process
+VAD_MAX_SPEECH_SEC   = 5.0    # force-fire after this many seconds of continuous speech
+VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 
-# Absolute path to the project root directory (where this file lives)
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# ── STT thresholds ────────────────────────────────────────────────────────────
+STT_NO_SPEECH_THRESHOLD    = 0.95   # drop audio if Whisper this uncertain
+STT_LANG_CONFIDENCE_FLOOR  = 0.70   # retry as English below this confidence
+STT_BEAM_SIZE              = 5      # Whisper beam size (1=fast, 5=accurate)
 
-# tests/audio_samples/ — reference audio and test clips
-AUDIO_SAMPLES_DIR = os.path.join(PROJECT_ROOT, "tests", "audio_samples")
-
-# Reference audio used by IndicF5 TTS for voice cloning
-REF_AUDIO_PATH = os.path.join(AUDIO_SAMPLES_DIR, "ref_cropped.wav")
-
-# Reference transcript matching the reference audio above
-REF_TEXT = "தாமிரபரணி ஆற்றின் கரையுரங்களில் வசிக்கும்."
-
-# Standard test audio clips (Tamil)
-SAMPLE_TAMIL_1 = os.path.join(AUDIO_SAMPLES_DIR, "St1.wav")
-SAMPLE_TAMIL_2 = os.path.join(AUDIO_SAMPLES_DIR, "St2.wav")
+# ── Pipeline flags ────────────────────────────────────────────────────────────
+ENABLE_TTS = False   # set True to enable IndicF5 audio generation

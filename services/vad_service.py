@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from silero_vad import load_silero_vad, get_speech_timestamps
-
+from config import VAD_THRESHOLD
 
 class VADService:
     """
@@ -51,7 +51,7 @@ class VADService:
             self.model,
             sampling_rate=self.sampling_rate,
             return_seconds=return_seconds,
-            threshold=0.60,
+            threshold=VAD_THRESHOLD,
             min_speech_duration_ms=50
         )
 

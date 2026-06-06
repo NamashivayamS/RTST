@@ -15,7 +15,7 @@ import queue
 import sys
 import os
 import traceback
-import collections
+import traceback
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -24,6 +24,12 @@ from fastapi.middleware.cors import CORSMiddleware
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+from config import (
+    VAD_SILENCE_SEC, VAD_MIN_SPEECH_SEC,
+    VAD_MAX_SPEECH_SEC, SAMPLE_RATE as CFG_SAMPLE_RATE,
+    ENABLE_TTS
+)
 
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
@@ -48,35 +54,52 @@ gpu_lock: asyncio.Lock | None = None
 # ── Streaming constants ────────────────────────────────────────────────────────
 SAMPLE_RATE        = 16000
 RING_BUFFER_SEC    = 30                          # how much audio to keep
-SILENCE_SAMPLES    = int(SAMPLE_RATE * 0.6)      # 600ms — fire sooner after pause
-MIN_SPEECH_SAMPLES = int(SAMPLE_RATE * 0.5)      # 500ms — allow shorter phrases
-MAX_SPEECH_SAMPLES = int(SAMPLE_RATE * 7.0)      # 7s — force chunking
+SILENCE_SAMPLES    = int(CFG_SAMPLE_RATE * VAD_SILENCE_SEC)
+MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
+MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
 
 
 # ── Per-connection state ───────────────────────────────────────────────────────
 class ConnectionState:
     def __init__(self):
-        maxlen = SAMPLE_RATE * RING_BUFFER_SEC
-        self._ring   = collections.deque(maxlen=maxlen)
-        self._total  = 0          # total samples ever pushed
-        self._utt_start = 0       # sample index where current utterance began
-        self.active_tasks = 0
-        self.was_speaking  = False
+        self._maxlen    = SAMPLE_RATE * RING_BUFFER_SEC  # 480,000 samples
+        self._ring      = np.zeros(self._maxlen, dtype=np.float32)  # pre-allocated
+        self._write     = 0      # where to write next
+        self._total     = 0      # total samples ever received
+        self._utt_start = 0
+        self.active_tasks    = 0
+        self.was_speaking    = False
         self.silence_samples = 0
         self.target_lang = "ta"
 
     def push(self, chunk: np.ndarray):
-        self._ring.extend(chunk.tolist())
-        self._total += len(chunk)
+        n   = len(chunk)
+        end = self._write + n
+
+        if end <= self._maxlen:
+            # Simple case — fits without wrapping
+            self._ring[self._write:end] = chunk
+        else:
+            # Wrap-around case — split across end and start of buffer
+            first = self._maxlen - self._write
+            self._ring[self._write:] = chunk[:first]   # fill to end
+            self._ring[:n - first]   = chunk[first:]   # wrap to start
+        
+        self._write  = end % self._maxlen
+        self._total += n
 
     def get_utterance(self) -> np.ndarray:
-        """Extract samples from utterance start to now."""
-        buf = np.array(self._ring, dtype=np.float32)
-        samples_in_buf = len(buf)
-        # How far back is utt_start from current tail?
-        offset = self._total - self._utt_start
-        start  = max(0, samples_in_buf - offset)
-        return buf[start:]
+        offset = min(self._total - self._utt_start, self._maxlen)
+        end    = self._write
+        start  = (end - offset) % self._maxlen
+
+        if start < end:
+            return self._ring[start:end].copy()   # no wrap — simple slice
+        else:
+            return np.concatenate([              # wrap — two slices joined
+                self._ring[start:],
+                self._ring[:end]
+            ])
 
     def mark_utterance_start(self):
         self._utt_start = self._total
@@ -105,9 +128,16 @@ async def startup_event():
     await loop.run_in_executor(
         None, lambda: router.translation_service.translate("வணக்கம்", "ta", "eng_Latn")
     )
-    await loop.run_in_executor(
-        None, lambda: router.tts_service.generate_audio("வணக்கம்.")
-    )
+    
+    if ENABLE_TTS:
+        print("[Backend] Warming up TTS...")
+        await loop.run_in_executor(
+            None, lambda: router.tts_service.generate_audio("வணக்கம்.")
+        )
+        print("[Backend] TTS warmed up.")
+    else:
+        print("[Backend] TTS warmup skipped (ENABLE_TTS=False).")
+
     print("[Backend] All models warmed up. Server ready.")
 
 
@@ -233,9 +263,15 @@ async def _run_pipeline(
     """
     try:
         print(f"[Pipeline Task] Utterance duration: {len(audio)/SAMPLE_RATE:.2f}s")
+        
+        _lock_wait_start = asyncio.get_event_loop().time()
         async with gpu_lock:
+            _lock_wait = asyncio.get_event_loop().time() - _lock_wait_start
+            if _lock_wait > 0.05:   # only print if wait was meaningful (>50ms)
+                print(f"[Pipeline Task] GPU lock wait: {_lock_wait:.3f}s")
+            
             result = await loop.run_in_executor(
-                None, lambda: router.process_audio(audio, target_lang=state.target_lang)
+                None, lambda: router.process_audio(audio, target_lang=state.target_lang, skip_vad=True)
             )
 
         if not result.get("translated_text"):

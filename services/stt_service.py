@@ -43,6 +43,8 @@ def _is_hallucination(text: str) -> bool:
     return any(r.match(t) for r in _HALLUCINATION_RE)
 
 
+from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, STT_BEAM_SIZE
+
 class STTService:
     """
     Speech-to-Text service using Faster-Whisper (medium model).
@@ -56,17 +58,17 @@ class STTService:
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
-    NO_SPEECH_THRESHOLD = 0.95   # lower the number --> More Drop the audio #0.55 for noisy auditorium
+    NO_SPEECH_THRESHOLD = STT_NO_SPEECH_THRESHOLD
 
     # If Tamil is detected with less than this confidence AND the language
     # could be confused with a South Indian neighbour, reclassify as Tamil.
-    LANG_CONFIDENCE_THRESHOLD = 0.90
+    LANG_CONFIDENCE_THRESHOLD = STT_LANG_CONFIDENCE_FLOOR
 
     # Tanglish detection: fraction of words that appear to be English
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
 
-    def __init__(self, beam_size: int = 1):
+    def __init__(self, beam_size: int = STT_BEAM_SIZE):
         self.model     = whisper_model
         self.beam_size = beam_size
         print("STTService initialized and ready.")
@@ -100,9 +102,12 @@ class STTService:
             language=language,
             # Provide context to bias the model toward Tamil and English evenly.
             # This helps language detection on very short sentences for both languages.
-            initial_prompt="வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you?",
+            initial_prompt=(
+                "Coimbatore, Tirupur, Chennai, Trichy, Madurai, Ramraj, Namashivayam. "
+                "Hello. Good morning. வணக்கம். நன்றி."
+            ),
             # Whisper's own silence probability — returned in segment.no_speech_prob
-            vad_filter=True,             # built-in VAD pre-filter (fast, CPU)
+            vad_filter=False,             # Disabled to avoid double-VAD penalty
             vad_parameters=dict(
                 min_silence_duration_ms=500,
                 speech_pad_ms=200,
@@ -150,10 +155,32 @@ class STTService:
         # Since we now support these languages fully, we accept Whisper's detection
         # unless it's a completely unsupported language.
 
-        # If language is still unsupported (e.g. 'fr', 'zh'), fall back to English
+        # If language is still unsupported, check confidence before falling back
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
-            print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
-            detected_lang = "en"
+            if lang_prob < 0.70:
+                # Low confidence wrong language — retry with forced English
+                print(f"[STT] Low-confidence '{detected_lang}' ({lang_prob:.0%}) — retrying as English")
+                segments_gen2, info2 = self.model.transcribe(
+                    audio_input,
+                    beam_size=self.beam_size,
+                    language="en",
+                    vad_filter=False,
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                )
+                segments      = list(segments_gen2)
+                info          = info2
+                detected_lang = "en"
+                lang_prob     = info2.language_probability
+
+                # Re-run hallucination check on new transcription
+                full_text = " ".join(seg.text.strip() for seg in segments).strip()
+                if _is_hallucination(full_text):
+                    return self._empty(full_text, info, silence=True)
+            else:
+                # High confidence wrong language — just fall back silently
+                print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
+                detected_lang = "en"
 
         # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False

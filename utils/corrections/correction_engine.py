@@ -1,10 +1,12 @@
 from utils.corrections.tamil_corrections import TAMIL_CORRECTIONS
 from utils.corrections.tanglish_corrections import TANGLISH_CORRECTIONS
+from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
 
 # Merge all correction dictionaries
 ALL_CORRECTIONS = {
     **TAMIL_CORRECTIONS,
-    **TANGLISH_CORRECTIONS
+    **TANGLISH_CORRECTIONS,
+    **PROPER_NOUN_CORRECTIONS   # ← applied to all languages
 }
 
 

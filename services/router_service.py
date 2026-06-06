@@ -208,7 +208,7 @@ class RouterService:
     # Main pipeline entry point
     # ──────────────────────────────────────────────────────────────────────────
 
-    def process_audio(self, audio_input, target_lang: str = "ta", language: str | None = None) -> dict:
+    def process_audio(self, audio_input, target_lang: str = "ta", language: str | None = None, skip_vad: bool = False) -> dict:
         """
         Full pipeline: raw audio array (float32, 16kHz) → subtitles + TTS queue.
 
@@ -268,85 +268,47 @@ class RouterService:
                     f"(RMS={rms:.4f})"
                 )
 
-                # Silero VAD verification
-                segments = self.vad_service.get_speech_segments(
-                    audio_input,
-                    return_seconds=False
-                )
-
-                if not segments:
-
-                    print(
-                        "[Pipeline] Silero VAD: "
-                        "No speech detected."
+                if skip_vad:
+                    print("[Pipeline] VAD skipped (pre-validated by streaming VAD)")
+                    speech_audio = audio_input
+                    vad_time = time.perf_counter() - vad_start
+                    print(f"[Pipeline] VAD Processing Time: {vad_time:.3f}s")
+                else:
+                    # Silero VAD verification
+                    segments = self.vad_service.get_speech_segments(
+                        audio_input,
+                        return_seconds=False
                     )
 
-                    return self._empty_result()
+                    if not segments:
+                        print("[Pipeline] Silero VAD: No speech detected.")
+                        return self._empty_result()
 
-                print(f"[VAD] Segments={len(segments)}")
+                    print(f"[VAD] Segments={len(segments)}")
 
-                for i, seg in enumerate(segments, 1):
-                    print(
-                        f"[VAD] {i}: "
-                        f"{seg['start']} -> {seg['end']}"
-                    )
+                    for i, seg in enumerate(segments, 1):
+                        print(f"[VAD] {i}: {seg['start']} -> {seg['end']}")
 
-                start_idx = segments[0]["start"]
-                end_idx = segments[-1]["end"]
-                speech_audio = audio_input[start_idx:end_idx]
+                    start_idx = segments[0]["start"]
+                    end_idx = segments[-1]["end"]
+                    speech_audio = audio_input[start_idx:end_idx]
 
-                speech_rms = float(
-                    np.sqrt(np.mean(speech_audio ** 2))
-                )
+                    speech_rms = float(np.sqrt(np.mean(speech_audio ** 2)))
+                    print(f"[VAD] Extracted RMS={speech_rms:.4f}")
 
-                print(
-                    f"[VAD] Extracted RMS="
-                    f"{speech_rms:.4f}"
-                )
-                # if not self.vad_service.has_speech(audio_input):
+                    if len(speech_audio) == 0:
+                        print("[Pipeline] Speech extraction returned empty audio.")
+                        return self._empty_result()
 
-                #     print(
-                #         "[Pipeline] Silero VAD: "
-                #         "No speech detected."
-                #     )
+                    original_duration = len(audio_input) / 16000
+                    speech_duration = len(speech_audio) / 16000
 
-                #     return self._empty_result()
+                    print(f"[Pipeline] Speech Extraction: {original_duration:.2f}s → {speech_duration:.2f}s")
+                    audio_input = speech_audio
+                    print("[Pipeline] Silero VAD: Speech detected.")
 
-                # speech_audio = self.vad_service.extract_speech_audio(
-                #     audio_input
-                # )
-
-                if len(speech_audio) == 0:
-
-                    print(
-                        "[Pipeline] Speech extraction "
-                        "returned empty audio."
-                    )
-
-                    return self._empty_result()
-
-                original_duration = len(audio_input) / 16000
-                speech_duration = len(speech_audio) / 16000
-
-                print(
-                    f"[Pipeline] Speech Extraction: "
-                    f"{original_duration:.2f}s → "
-                    f"{speech_duration:.2f}s"
-                )
-
-                audio_input = speech_audio
-
-                print(
-                    "[Pipeline] Silero VAD: "
-                    "Speech detected."
-                )
-
-                vad_time = time.perf_counter() - vad_start
-
-                print(
-                    f"[Pipeline] VAD Processing Time: "
-                    f"{vad_time:.3f}s"
-                )
+                    vad_time = time.perf_counter() - vad_start
+                    print(f"[Pipeline] VAD Processing Time: {vad_time:.3f}s")
             
 
             print(

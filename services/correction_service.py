@@ -22,9 +22,14 @@ class CorrectionService:
         if not text.strip():
             return text
         if language == "ta":
-            return apply_corrections(text)
+            return apply_corrections(text)   # Tamil + Tanglish + proper nouns
         if language == "en":
-            return text.strip()
+            # English only gets proper noun corrections, not Tamil script substitutions
+            from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
+            corrected = text.strip()
+            for wrong, right in PROPER_NOUN_CORRECTIONS.items():
+                corrected = corrected.replace(wrong, right)
+            return corrected
         return text.strip()
 
     def correct_tamil_only(self, text: str) -> str:
