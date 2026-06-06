@@ -21,6 +21,8 @@ WHISPER_LANG_TO_INDICTRANS = {
 # Since we now support them, we no longer force reclassification.
 TAMIL_CONFUSED_AS = set()
 
+TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different scripts
+
 # Hallucination phrases Whisper emits for near-silence in Tamil context.
 # If the full transcription matches one of these, treat it as empty.
 HALLUCINATION_PATTERNS = [
@@ -154,6 +156,18 @@ class STTService:
         # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
         # Since we now support these languages fully, we accept Whisper's detection
         # unless it's a completely unsupported language.
+
+        # After language detection, add script check for Tamil spoken with low confidence:
+        if detected_lang in TAMIL_SCRIPT_INDICATORS and lang_prob < 0.75:
+            # Check if the actual transcribed text is in Tamil script
+            tamil_script_ratio = sum(
+                1 for ch in full_text 
+                if '\u0B80' <= ch <= '\u0BFF'   # Tamil Unicode block
+            ) / max(len(full_text), 1)
+            
+            if tamil_script_ratio > 0.3:   # >30% Tamil characters
+                print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
+                detected_lang = "ta"
 
         # If language is still unsupported, check confidence before falling back
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
