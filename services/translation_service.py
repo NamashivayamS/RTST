@@ -53,17 +53,18 @@ class TranslationService:
 
     def _load_model_if_needed(self, src_lang: str, tgt_lang: str):
         key = self._pair_key(src_lang, tgt_lang)
-        if key in self._models:
-            return
-
         model_name = MODEL_REGISTRY.get(key)
+        
         if model_name is None:
             raise ValueError(
                 f"No model registered for '{key}'. "
                 f"Available: {list(MODEL_REGISTRY.keys())}"
             )
+            
+        if model_name in self._models:
+            return
 
-        print(f"TranslationService: Loading model for {key} ({model_name})...")
+        print(f"TranslationService: Loading model '{model_name}'...")
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         model = AutoModelForSeq2SeqLM.from_pretrained(
             model_name,
@@ -71,9 +72,9 @@ class TranslationService:
             torch_dtype=torch.float16   # ~400MB VRAM saving vs float32
         ).to(self.device)
 
-        self._tokenizers[key] = tokenizer
-        self._models[key] = model
-        print(f"TranslationService: Model for {key} loaded successfully.")
+        self._tokenizers[model_name] = tokenizer
+        self._models[model_name] = model
+        print(f"TranslationService: Model '{model_name}' loaded successfully.")
 
     def translate(
         self,
@@ -111,8 +112,9 @@ class TranslationService:
         self._load_model_if_needed(src_lang, tgt_lang)
 
         key = self._pair_key(src_lang, tgt_lang)
-        tokenizer = self._tokenizers[key]
-        model = self._models[key]
+        model_name = MODEL_REGISTRY.get(key)
+        tokenizer = self._tokenizers[model_name]
+        model = self._models[model_name]
 
         processed = self.ip.preprocess_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang)
 
