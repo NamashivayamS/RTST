@@ -60,6 +60,7 @@ RING_BUFFER_SEC    = 30                          # how much audio to keep
 SILENCE_SAMPLES    = int(CFG_SAMPLE_RATE * VAD_SILENCE_SEC)
 MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
 MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
+MAX_PIPELINE_QUEUE = 2
 
 
 def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int) -> bool:
@@ -80,6 +81,7 @@ class ConnectionState:
         self._total     = 0      # total samples ever received
         self._utt_start = 0
         self.active_tasks    = 0
+        self.pending_utterance = None
         self.was_speaking    = False
         self.silence_samples = 0
         self.target_lang = "ta"
@@ -252,12 +254,14 @@ async def websocket_translate(websocket: WebSocket):
                 if state.utterance_length >= state.max_speech_samples:
                     utterance = state.get_utterance()
                     state.mark_utterance_start()  # reset for next utterance
-                    state.active_tasks += 1
-
-                    # Fire and forget — receive loop keeps running immediately
-                    asyncio.create_task(
-                        _run_pipeline(websocket, utterance, state, loop)
-                    )
+                    if state.active_tasks >= MAX_PIPELINE_QUEUE:
+                        print(f"[Pipeline] Replacing stale queued utterance with newer one")
+                        state.pending_utterance = utterance
+                    else:
+                        state.active_tasks += 1
+                        asyncio.create_task(
+                            _run_pipeline(websocket, utterance, state, loop)
+                        )
             else:
                 state.silence_samples += len(chunk)
 
@@ -271,12 +275,14 @@ async def websocket_translate(websocket: WebSocket):
                     ):
                         utterance = state.get_utterance()
                         state.mark_utterance_start()  # reset for next utterance
-                        state.active_tasks += 1
-
-                        # Fire and forget — receive loop keeps running immediately
-                        asyncio.create_task(
-                            _run_pipeline(websocket, utterance, state, loop)
-                        )
+                        if state.active_tasks >= MAX_PIPELINE_QUEUE:
+                            print(f"[Pipeline] Replacing stale queued utterance with newer one")
+                            state.pending_utterance = utterance
+                        else:
+                            state.active_tasks += 1
+                            asyncio.create_task(
+                                _run_pipeline(websocket, utterance, state, loop)
+                            )
 
     except WebSocketDisconnect:
         pass
@@ -369,3 +375,8 @@ async def _run_pipeline(
             pass
     finally:
         state.active_tasks = max(0, state.active_tasks - 1)
+        if state.pending_utterance is not None:
+            next_utt = state.pending_utterance
+            state.pending_utterance = None
+            state.active_tasks += 1
+            asyncio.create_task(_run_pipeline(websocket, next_utt, state, loop))

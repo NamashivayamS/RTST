@@ -116,9 +116,7 @@ class STTService:
                 speech_pad_ms=200,
             ),
             condition_on_previous_text=False,  # prevents context bleed between chunks
-            # Removing temperature=0.0 allows Whisper to use its default fallback temperatures 
-            # [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]. If greedy decoding (0.0) fails on Tamil grammar, 
-            # it will automatically retry, drastically improving accuracy on complex sentences.
+            temperature=0.0,                   # force greedy decoding to prevent 15-20s latency spikes
         )
 
         segments = list(segments_gen)
@@ -164,55 +162,41 @@ class STTService:
         )
 
         # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
-        # Since we now support these languages fully, we accept Whisper's detection
-        # unless it's a completely unsupported language.
-
-        # After language detection, add script check for Tamil spoken with low confidence:
-        if detected_lang in TAMIL_SCRIPT_INDICATORS and lang_prob < 0.75:
-            # Check if the actual transcribed text is in Tamil script
-            tamil_script_ratio = sum(
-                1 for ch in full_text 
-                if '\u0B80' <= ch <= '\u0BFF'   # Tamil Unicode block
-            ) / max(len(full_text), 1)
-            
-            if tamil_script_ratio > 0.3:   # >30% Tamil characters
-                print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
-                detected_lang = "ta"
-
-        # If language is still unsupported, check confidence before falling back
-        if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
-            # Check if output text is actually Tamil script regardless of detected language
+        # Check if output text is actually Tamil script regardless of detected language
+        if detected_lang != "ta" and detected_lang != "en":
             tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
             tamil_ratio = tamil_chars / max(len(full_text), 1)
             
             if tamil_ratio > 0.3:
                 print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
                 detected_lang = "ta"
+
+        # If language is still unsupported, check confidence before falling back
+        if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
+            if lang_prob < 0.70:
+                # Low confidence wrong language — retry with forced English
+                print(f"[STT] Low-confidence '{detected_lang}' ({lang_prob:.0%}) — retrying as English")
+                segments_gen2, info2 = self.model.transcribe(
+                    audio_input,
+                    beam_size=self.beam_size,
+                    language="en",
+                    vad_filter=False,
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                )
+                segments      = list(segments_gen2)
+                info          = info2
+                detected_lang = "en"
+                lang_prob     = info2.language_probability
+
+                # Re-run hallucination check on new transcription
+                full_text = " ".join(seg.text.strip() for seg in segments).strip()
+                if _is_hallucination(full_text):
+                    return self._empty(full_text, info, silence=True)
             else:
-                if lang_prob < 0.70:
-                    # Low confidence wrong language — retry with forced English
-                    print(f"[STT] Low-confidence '{detected_lang}' ({lang_prob:.0%}) — retrying as English")
-                    segments_gen2, info2 = self.model.transcribe(
-                        audio_input,
-                        beam_size=self.beam_size,
-                        language="en",
-                        vad_filter=False,
-                        condition_on_previous_text=False,
-                        temperature=0.0,
-                    )
-                    segments      = list(segments_gen2)
-                    info          = info2
-                    detected_lang = "en"
-                    lang_prob     = info2.language_probability
-    
-                    # Re-run hallucination check on new transcription
-                    full_text = " ".join(seg.text.strip() for seg in segments).strip()
-                    if _is_hallucination(full_text):
-                        return self._empty(full_text, info, silence=True)
-                else:
-                    # High confidence wrong language — just fall back silently
-                    print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
-                    detected_lang = "en"
+                # High confidence wrong language — just fall back silently
+                print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
+                detected_lang = "en"
 
         # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False
@@ -227,6 +211,13 @@ class STTService:
             elif latin_ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD:
                 is_tanglish = True
                 print(f"[STT] Tanglish detected in: '{full_text}'")
+        elif detected_lang == "en":
+            # NEW: check if the text is actually Tamil script despite English detection
+            tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
+            tamil_ratio = tamil_chars / max(len(full_text), 1)
+            if tamil_ratio > 0.5:   # majority Tamil characters
+                print(f"[STT] Tamil script detected in 'en' output — reclassifying to 'ta'")
+                detected_lang = "ta"
 
         indictrans_lang = WHISPER_LANG_TO_INDICTRANS.get(detected_lang)
 

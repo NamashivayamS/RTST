@@ -700,6 +700,54 @@
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
+
+    /* ── Mobile Responsiveness ── */
+    @media (max-width: 600px) {
+      .app {
+        padding: 0 16px;
+      }
+      header {
+        flex-wrap: wrap;
+        padding: 16px 0 12px;
+      }
+      .logo-text .tagline {
+        display: none;
+      }
+      .header-stats {
+        margin-left: 0;
+        width: 100%;
+        margin-top: 8px;
+        justify-content: flex-start;
+      }
+      .subtitle-panel {
+        padding: 12px 0;
+      }
+      .utterance {
+        padding: 12px;
+        gap: 0 10px;
+      }
+      .utterance-text {
+        font-size: 16px;
+      }
+      .ecg-label {
+        display: none;
+      }
+      .ecg-stats {
+        display: none;
+      }
+      .controls {
+        flex-wrap: wrap;
+        padding: 12px 0 16px;
+      }
+      .info-col {
+        flex-basis: 100%;
+        order: 3;
+        margin-top: 8px;
+      }
+      .controls-right {
+        margin-left: auto;
+      }
+    }
   </style>
 </head>
 
@@ -717,7 +765,7 @@
       </div>
       <div class="logo-text">
         <div class="name">NeuralTongue</div>
-        <div class="tagline">Tamil ↔ English · Real-Time Neural Translation</div>
+        <div class="tagline">Indic ↔ English · Real-Time Neural Translation</div>
       </div>
       <div class="header-stats">
         <select id="targetLang" class="lang-select">

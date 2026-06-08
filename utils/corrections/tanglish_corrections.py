@@ -15,8 +15,9 @@ TANGLISH_CORRECTIONS = {
     "இன்டர்வியூ": "interview",
     "ரெஸ்யூம்": "resume",
     "சாலரி": "salary",
+    "போனஸ்": "bonus",
 
-    # ===== Tech =====
+    # ===== Tech & Hardware =====
     "போன்": "phone",
     "மொபைல்": "mobile",
     "லாப்டாப்": "laptop",
@@ -29,8 +30,12 @@ TANGLISH_CORRECTIONS = {
     "ஹாட்ஸ்பாட்": "hotspot",
     "ப்ளூடூத்": "bluetooth",
     "ரூட்டர்": "router",
+    "ஸ்கிரீன்": "screen",
+    "கீபோர்டு": "keyboard",
+    "மவுஸ்": "mouse",
+    "சார்ஜர்": "charger",
 
-    # ===== Programming =====
+    # ===== Programming & IT =====
     "கோடு": "code",
     "கோடிங்": "coding",
     "ப்ரோக்ராம்": "program",
@@ -49,6 +54,8 @@ TANGLISH_CORRECTIONS = {
     "பேக்கேஜ்": "package",
     "டேட்டாபேஸ்": "database",
     "ஏபிஐ": "api",
+    "க்ளவுட்": "cloud",
+    "கோடுபேஸ்": "codebase",
 
     # ===== File / Software =====
     "பைல்": "file",
@@ -62,7 +69,7 @@ TANGLISH_CORRECTIONS = {
     "டெர்மினல்": "terminal",
     "கமாண்ட்": "command",
 
-    # ===== Internet =====
+    # ===== Internet & Social Media =====
     "குரோம்": "chrome",
     "கூகுள்": "google",
     "யூடியூப்": "youtube",
@@ -73,8 +80,11 @@ TANGLISH_CORRECTIONS = {
     "லிங்க்டின்": "linkedin",
     "ட்விட்டர்": "twitter",
     "ஃபேஸ்புக்": "facebook",
+    "இன்டர்நெட்": "internet",
+    "வெப்சைட்": "website",
+    "ஆப்": "app",
 
-    # ===== Communication =====
+    # ===== Communication & Actions =====
     "கால்": "call",
     "மெசேஜ்": "message",
     "டெக்ஸ்ட்": "text",
@@ -84,8 +94,7 @@ TANGLISH_CORRECTIONS = {
     "ஈமெயில்": "email",
     "லிங்க்": "link",
     "ஜூம்": "zoom",
-
-    # ===== Actions (safe standalone forms only) =====
+    
     "அப்டேட்": "update",
     "டவுன்லோடு": "download",
     "அப்லோடு": "upload",
@@ -95,6 +104,8 @@ TANGLISH_CORRECTIONS = {
     "லாக்அவுட்": "logout",
     "கனெக்ட்": "connect",
     "டிஸ்கனெக்ட்": "disconnect",
+    "செண்ட்": "send",
+    "ரிசீவ்": "receive",
 
     # ===== AI / Data =====
     "ஏஐ": "ai",
@@ -102,6 +113,7 @@ TANGLISH_CORRECTIONS = {
     "சாட்பாட்": "chatbot",
     "மாடல்": "model",
     "டேட்டாசெட்": "dataset",
+    "அல்காரிதம்": "algorithm",
 
     # ===== Misc stable words =====
     "டிக்கெட்": "ticket",
@@ -111,6 +123,11 @@ TANGLISH_CORRECTIONS = {
     "பேங்க்": "bank",
     "அக்கவுண்ட்": "account",
     "பாஸ்வேர்ட்": "password",
-    "யூசர்": "user"
+    "யூசர்": "user",
+    "நம்பர்": "number",
+    "ஸ்டேட்டஸ்": "status",
+    "டைம்": "time",
+    "டேட்": "date",
+    "டெஸ்ட்": "test",
+    "லைவ்": "live"
 }
-
