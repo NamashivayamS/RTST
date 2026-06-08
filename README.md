@@ -1,6 +1,6 @@
-# Real-Time Speech Translator (Tamil <-> English)
+# Real-Time Speech Translator (Indic Languages ↔ English)
 
-This project provides a bidirectional streaming pipeline that translates spoken Tamil to English, and English to Tamil in real-time. It uses an asynchronous FastAPI WebSocket backend and a low-latency web interface.
+This project provides a bidirectional streaming pipeline that translates spoken Indic languages (Tamil, Hindi, Telugu, Kannada, Malayalam) to English, and English back to Indic languages in real-time. It uses an asynchronous FastAPI WebSocket backend and a low-latency web interface.
 
 ## Key Features
 
@@ -9,8 +9,8 @@ This project provides a bidirectional streaming pipeline that translates spoken 
   * **Silero VAD**: Filters out background noise and silence before processing.
   * **Faster-Whisper (Medium)**: Handles Speech-to-Text (STT) optimized for Tamil, including built-in Hallucination filtering and Tanglish (code-switching) detection.
   * **DeepMultilingualPunctuation**: Restores missing punctuation in transcriptions.
-  * **IndicTrans2**: Provides neural machine translation between English and Tamil.
-  * **IndicF5**: High-fidelity zero-shot Text-to-Speech (TTS) for natural Tamil and English audio synthesis.
+  * **IndicTrans2**: Provides neural machine translation between English and multiple Indic languages (Tamil, Hindi, Telugu, Kannada, Malayalam).
+  * **IndicF5**: High-fidelity zero-shot Text-to-Speech (TTS) for natural Indic and English audio synthesis.
 * **Zero-Copy Audio Streaming**: Uses a custom binary protocol (JSON metadata + PCM raw float32 arrays) over WebSockets to bypass Base64 encoding overhead.
 * **Latency Masking & Chunking**: Chunks text based on punctuation to feed the TTS engine in small 3-5 word bursts, reducing perceived latency.
 * **VRAM Optimized**: Uses bidirectional lazy loading for large models (IndicTrans2, IndicF5) so they only consume GPU memory when actively translating in a specific direction. It runs stably on consumer hardware like an RTX 3050.
