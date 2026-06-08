@@ -22,6 +22,7 @@ from silero_vad import load_silero_vad
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -50,6 +51,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
+
 manager = ConnectionManager()
 router: RouterService | None = None
 gpu_lock: asyncio.Lock | None = None
@@ -63,12 +66,12 @@ MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
 MAX_PIPELINE_QUEUE = 2
 
 
-def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int) -> bool:
+def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int, threshold: float = 0.60) -> bool:
     WINDOW_SIZE = 512
     for i in range(0, len(audio) - WINDOW_SIZE + 1, WINDOW_SIZE):
         window = audio[i : i + WINDOW_SIZE]
         tensor = torch.tensor(window, dtype=torch.float32)
-        if vad_model(tensor, sample_rate).item() > 0.60:
+        if vad_model(tensor, sample_rate).item() > threshold:
             return True
     return False
 
@@ -237,7 +240,7 @@ async def websocket_translate(websocket: WebSocket):
             try:
                 has_speech = await loop.run_in_executor(
                     None,
-                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, SAMPLE_RATE)
+                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, SAMPLE_RATE, state.vad_threshold)
                 )
             except Exception as e:
                 print(f"[VAD Error] {e}")   # temporary — remove after confirming fix

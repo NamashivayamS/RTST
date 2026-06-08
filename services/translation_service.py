@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
+import re
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from IndicTransToolkit.processor import IndicProcessor
 
@@ -32,6 +33,44 @@ DEFAULT_TARGET_MAP = {
     "eng_Latn": "tam_Taml",
     "tam_Taml": "eng_Latn",
 }
+
+def _sanitize_translation(text: str) -> str:
+    """
+    Strips IndicProcessor boundary artifacts that leak into translation output.
+    
+    Known artifacts:
+      - Leading 'ൾ' (Malayalam closing bracket, U+0D3E vicinity, used as sentence marker)
+      - Leading/trailing periods from sentence boundary tokens
+      - Multiple spaces
+    """
+    # Strip leading Malayalam bracket artifact (U+0D3E and nearby range)
+    text = text.lstrip('ൾ').lstrip()
+    
+    # Strip leading punctuation artifacts (rogue period at start)
+    text = re.sub(r'^\s*[\.।]\s*', '', text)
+    
+    # Collapse multiple spaces
+    text = re.sub(r'  +', ' ', text)
+    
+    return text.strip()
+
+def _is_devanagari_script(text: str) -> bool:
+    devanagari = sum(1 for ch in text if '\u0900' <= ch <= '\u097F')
+    alpha_chars = sum(1 for ch in text if ch.isalpha())
+    if alpha_chars == 0:
+        return False
+    return (devanagari / alpha_chars) > 0.3
+
+def _is_malayalam_script(text: str) -> bool:
+    malayalam = sum(1 for ch in text if '\u0D00' <= ch <= '\u0D7F')
+    alpha_chars = sum(1 for ch in text if ch.isalpha())
+    if alpha_chars == 0:
+        return False
+    return (malayalam / alpha_chars) > 0.3
+
+def _is_non_tamil(text: str) -> bool:
+    return _is_devanagari_script(text) or _is_malayalam_script(text)
+
 
 
 class TranslationService:
@@ -99,15 +138,16 @@ class TranslationService:
         texts: list[str],
         src_lang: str,
         tgt_lang: str,
-        max_new_tokens: int = 256     # FIXED: was max_length
+        max_new_tokens: int = 256
     ) -> list[str]:
         if not texts:
             return []
 
-        # Guard: empty strings reach the model and cause undefined behaviour
         texts = [t for t in texts if t.strip()]
         if not texts:
             return []
+
+        original_texts = texts[:]  # keep originals before IndicProcessor modifies them
 
         self._load_model_if_needed(src_lang, tgt_lang)
 
@@ -128,8 +168,9 @@ class TranslationService:
         with torch.no_grad():
             generated_tokens = model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens,   # FIXED: only counts output tokens
-                num_beams=2                      # 2x faster than default, preserves Tamil accuracy
+                max_new_tokens=max_new_tokens,
+                num_beams=2,
+                forced_bos_token_id=tokenizer.convert_tokens_to_ids(tgt_lang),
             )
 
         decoded = tokenizer.batch_decode(
@@ -137,7 +178,27 @@ class TranslationService:
             skip_special_tokens=True
         )
 
-        return self.ip.postprocess_batch(decoded, lang=tgt_lang)
+        results = self.ip.postprocess_batch(decoded, lang=tgt_lang)
+
+        # Sanitize IndicProcessor boundary artifacts from all results
+        results = [_sanitize_translation(r) for r in results]
+
+        # ── Script drift guard ────────────────────────────────────────────────
+        if tgt_lang == "tam_Taml":
+            validated = []
+            for src_text, result in zip(original_texts, results):
+                if _is_non_tamil(result):
+                    print(
+                        f"[Translation] Script drift: expected Tamil script.\n"
+                        f"  Input : '{src_text}'\n"
+                        f"  Output: '{result}'"
+                    )
+                    validated.append(src_text)  # fallback to English source
+                else:
+                    validated.append(result)
+            return validated
+
+        return results
 
     def translate_auto(self, text: str, detected_language: str, target_language: str | None = None) -> dict:
         """

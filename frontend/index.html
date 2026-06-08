@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NeuralTongue — Real-Time Speech Translation</title>
+  <title>iSpeak Global - Real-Time Speech Translation</title>
+  <link rel="icon" type="image/png" href="/static/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link
     href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=Noto+Serif+Tamil:wght@300;400;600&family=JetBrains+Mono:wght@300;400;500&display=swap"
@@ -107,10 +108,7 @@
     }
 
     .logo-mark {
-      width: 36px;
-      height: 36px;
-      border: 1.5px solid var(--accent);
-      border-radius: 6px;
+      height: 48px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -124,15 +122,6 @@
       stroke: var(--accent);
       fill: none;
       stroke-width: 1.5;
-    }
-
-    .logo-mark::after {
-      content: '';
-      position: absolute;
-      inset: -1px;
-      border-radius: 6px;
-      box-shadow: 0 0 12px var(--accent-glow);
-      pointer-events: none;
     }
 
     .logo-text .name {
@@ -706,44 +695,55 @@
       .app {
         padding: 0 16px;
       }
+
       header {
         flex-wrap: wrap;
         padding: 16px 0 12px;
       }
+
       .logo-text .tagline {
         display: none;
       }
+
       .header-stats {
         margin-left: 0;
         width: 100%;
         margin-top: 8px;
         justify-content: flex-start;
       }
+
       .subtitle-panel {
         padding: 12px 0;
       }
+
       .utterance {
         padding: 12px;
         gap: 0 10px;
       }
+
       .utterance-text {
         font-size: 16px;
       }
+
       .ecg-label {
         display: none;
       }
+
       .ecg-stats {
         display: none;
       }
+
       .controls {
         flex-wrap: wrap;
         padding: 12px 0 16px;
       }
+
       .info-col {
         flex-basis: 100%;
         order: 3;
         margin-top: 8px;
       }
+
       .controls-right {
         margin-left: auto;
       }
@@ -758,13 +758,10 @@
     <!-- ── Header ── -->
     <header>
       <div class="logo-mark">
-        <svg viewBox="0 0 24 24">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-          <path d="M8 12h8M12 8v8" />
-        </svg>
+        <img src="/static/logo.png" alt="iSpeak Global Logo" style="height: 100%; width: auto; object-fit: contain;" />
       </div>
       <div class="logo-text">
-        <div class="name">NeuralTongue</div>
+        <div class="name">iSpeak Global</div>
         <div class="tagline">Indic ↔ English · Real-Time Neural Translation</div>
       </div>
       <div class="header-stats">
@@ -830,9 +827,9 @@
         </div>
         <button class="btn-clear" id="btnClear">↺ Clear</button>
         <select id="envSelect" class="btn-clear" style="cursor:pointer; margin-left: 8px;">
-          <option value="quiet">🔇 Quiet Room</option>
-          <option value="conference">🎤 Conference</option>
-          <option value="noisy">🔊 Noisy</option>
+          <option value="quiet"> Quiet Room</option>
+          <option value="conference"> Conference</option>
+          <option value="noisy"> Noisy</option>
         </select>
       </div>
     </div>
@@ -875,7 +872,7 @@
     let currentRms = 0;
 
     let streamInterval = null;
-    let currentChunk   = [];
+    let currentChunk = [];
 
 
     // ECG state
@@ -935,10 +932,10 @@
         setWsStatus('alive', 'connected');
         modelPill.style.display = 'flex';
         infoText.textContent = 'Ready — press to speak';
-        
+
         ws.send(JSON.stringify({ action: 'config', target_lang: targetLang.value }));
         ws.send(JSON.stringify({ action: 'config', environment: document.getElementById('envSelect').value }));
-        
+
         targetLang.addEventListener('change', () => {
           if (ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ action: 'config', target_lang: targetLang.value }));
@@ -982,35 +979,35 @@
     }
 
     function handleMsg(msg) {
-        switch (msg.type) {
-            case 'subtitle':
-                createUtterance(msg);
-                setWsStatus('proc', 'translating');
-                infoText.textContent = 'Translating…';
-                break;
-            case 'audio':
-                pendingMeta = msg;
-                break;
-            case 'done':
-                if (recording) {
-                    setWsStatus('rec', 'listening');
-                    infoText.textContent = 'Listening…';
-                } else {
-                    setWsStatus('alive', 'connected');
-                    infoText.textContent = 'Ready — press to speak';
-                }
-                if (activeUtterance) {
-                    activeUtterance.classList.remove('active');
-                    activeUtterance = null;
-                }
-                break;
-            case 'error':
-                showToast(msg.message || 'Server error');
-                if (!recording) setWsStatus('alive', 'connected');
-                break;
-            case 'pong':
-                break;
-        }
+      switch (msg.type) {
+        case 'subtitle':
+          createUtterance(msg);
+          setWsStatus('proc', 'translating');
+          infoText.textContent = 'Translating…';
+          break;
+        case 'audio':
+          pendingMeta = msg;
+          break;
+        case 'done':
+          if (recording) {
+            setWsStatus('rec', 'listening');
+            infoText.textContent = 'Listening…';
+          } else {
+            setWsStatus('alive', 'connected');
+            infoText.textContent = 'Ready — press to speak';
+          }
+          if (activeUtterance) {
+            activeUtterance.classList.remove('active');
+            activeUtterance = null;
+          }
+          break;
+        case 'error':
+          showToast(msg.message || 'Server error');
+          if (!recording) setWsStatus('alive', 'connected');
+          break;
+        case 'pong':
+          break;
+      }
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1035,12 +1032,12 @@
 
       let tgtIso = 'en';
       if (msg.tgt_lang) {
-          if (msg.tgt_lang.startsWith('tam')) tgtIso = 'ta';
-          else if (msg.tgt_lang.startsWith('hin')) tgtIso = 'hi';
-          else if (msg.tgt_lang.startsWith('tel')) tgtIso = 'te';
-          else if (msg.tgt_lang.startsWith('kan')) tgtIso = 'kn';
-          else if (msg.tgt_lang.startsWith('mal')) tgtIso = 'ml';
-          else if (msg.tgt_lang.startsWith('eng')) tgtIso = 'en';
+        if (msg.tgt_lang.startsWith('tam')) tgtIso = 'ta';
+        else if (msg.tgt_lang.startsWith('hin')) tgtIso = 'hi';
+        else if (msg.tgt_lang.startsWith('tel')) tgtIso = 'te';
+        else if (msg.tgt_lang.startsWith('kan')) tgtIso = 'kn';
+        else if (msg.tgt_lang.startsWith('mal')) tgtIso = 'ml';
+        else if (msg.tgt_lang.startsWith('eng')) tgtIso = 'en';
       }
 
       const lang = tgtIso;
@@ -1132,77 +1129,77 @@
     // MICROPHONE CAPTURE
     // ─────────────────────────────────────────────────────────
     async function startRecording() {
-        if (recording) return;
+      if (recording) return;
 
-        try {
-            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        } catch {
-            showToast('Microphone access denied — check browser permissions');
-            return;
-        }
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch {
+        showToast('Microphone access denied — check browser permissions');
+        return;
+      }
 
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-        const source = audioCtx.createMediaStreamSource(mediaStream);
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+      const source = audioCtx.createMediaStreamSource(mediaStream);
 
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.5;
-        source.connect(analyser);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.5;
+      source.connect(analyser);
 
-        processor = audioCtx.createScriptProcessor(4096, 1, 1);
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
 
-        // Just accumulate — no silence detection, no buffering logic
-        processor.onaudioprocess = (e) => {
-            const samples = e.inputBuffer.getChannelData(0);
-            currentChunk.push(new Float32Array(samples));
-        };
+      // Just accumulate — no silence detection, no buffering logic
+      processor.onaudioprocess = (e) => {
+        const samples = e.inputBuffer.getChannelData(0);
+        currentChunk.push(new Float32Array(samples));
+      };
 
-        // Send every 250ms unconditionally — backend VAD decides utterance boundaries
-        streamInterval = setInterval(() => {
-            if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
-            if (currentChunk.length === 0) return;
+      // Send every 250ms unconditionally — backend VAD decides utterance boundaries
+      streamInterval = setInterval(() => {
+        if (!recording || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (currentChunk.length === 0) return;
 
-            const total  = currentChunk.reduce((s, a) => s + a.length, 0);
-            const merged = new Float32Array(total);
-            let offset   = 0;
-            for (const c of currentChunk) { merged.set(c, offset); offset += c.length; }
-            currentChunk = [];
+        const total = currentChunk.reduce((s, a) => s + a.length, 0);
+        const merged = new Float32Array(total);
+        let offset = 0;
+        for (const c of currentChunk) { merged.set(c, offset); offset += c.length; }
+        currentChunk = [];
 
-            ws.send(merged.buffer);
-        }, 250);
+        ws.send(merged.buffer);
+      }, 250);
 
-        recording = true;
-        btnRecord.classList.add('recording');
-        btnIcon.textContent = '⏹';
-        setWsStatus('rec', 'listening');
-        infoText.textContent = 'Listening…';
-        infoSub.textContent = 'Speak naturally · Tamil or English';
+      recording = true;
+      btnRecord.classList.add('recording');
+      btnIcon.textContent = '⏹';
+      setWsStatus('rec', 'listening');
+      infoText.textContent = 'Listening…';
+      infoSub.textContent = 'Speak naturally · Tamil or English';
 
-        startEcg();
+      startEcg();
     }
 
     function stopRecording() {
-        if (!recording) return;
-        recording = false;
+      if (!recording) return;
+      recording = false;
 
-        clearInterval(streamInterval);
-        streamInterval = null;
-        currentChunk   = [];
+      clearInterval(streamInterval);
+      streamInterval = null;
+      currentChunk = [];
 
-        if (processor)    { processor.disconnect();  processor    = null; }
-        if (analyser)     { analyser.disconnect();   analyser     = null; }
-        if (audioCtx)     { audioCtx.close();        audioCtx     = null; }
-        if (mediaStream)  { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (processor) { processor.disconnect(); processor = null; }
+      if (analyser) { analyser.disconnect(); analyser = null; }
+      if (audioCtx) { audioCtx.close(); audioCtx = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
 
-        btnRecord.classList.remove('recording');
-        btnIcon.textContent = '🎤';
-        setWsStatus('alive', 'connected');
-        infoText.textContent = 'Ready — press to speak';
-        infoSub.textContent = 'Auto-detects Tamil or English · 16 kHz PCM';
+      btnRecord.classList.remove('recording');
+      btnIcon.textContent = '🎤';
+      setWsStatus('alive', 'connected');
+      infoText.textContent = 'Ready — press to speak';
+      infoSub.textContent = 'Auto-detects Tamil or English · 16 kHz PCM';
 
-        stopEcg();
+      stopEcg();
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1406,13 +1403,13 @@
     });
 
     document.getElementById('envSelect').addEventListener('change', (e) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                action: 'config',
-                environment: e.target.value
-            }));
-            console.log(`[Frontend] Environment set to: ${e.target.value}`);
-        }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          action: 'config',
+          environment: e.target.value
+        }));
+        console.log(`[Frontend] Environment set to: ${e.target.value}`);
+      }
     });
 
     // ─────────────────────────────────────────────────────────
