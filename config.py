@@ -17,3 +17,28 @@ STT_BEAM_SIZE              = 5      # Whisper beam size (1=fast, 5=accurate)
 
 # ── Pipeline flags ────────────────────────────────────────────────────────────
 ENABLE_TTS = False   # set True to enable IndicF5 audio generation
+
+# ── Environment Presets ───────────────────────────────────────────────────────
+ENVIRONMENT_PRESETS = {
+    "quiet": {
+        "vad_threshold":       0.60,
+        "silence_sec":         0.4,
+        "min_speech_sec":      0.35,
+        "no_speech_threshold": 0.95,
+        "rms_gate":            0.005,
+    },
+    "conference": {
+        "vad_threshold":       0.70,
+        "silence_sec":         0.6,
+        "min_speech_sec":      0.50,
+        "no_speech_threshold": 0.85,
+        "rms_gate":            0.010,
+    },
+    "noisy": {
+        "vad_threshold":       0.80,
+        "silence_sec":         0.8,
+        "min_speech_sec":      0.60,
+        "no_speech_threshold": 0.75,
+        "rms_gate":            0.015,
+    },
+}

@@ -26,24 +26,30 @@ class CorrectionService:
         if language == "en":
             # English only gets proper noun corrections, not Tamil script substitutions
             from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
+            import re
             corrected = text.strip()
             for wrong, right in PROPER_NOUN_CORRECTIONS.items():
-                corrected = corrected.replace(wrong, right)
+                pattern = r'(?<!\w)' + re.escape(wrong) + r'(?!\w)'
+                corrected = re.sub(pattern, right, corrected)
             return corrected
         return text.strip()
 
     def correct_tamil_only(self, text: str) -> str:
+        import re
         text = text.strip()
         corrected = text
         for wrong, correct in TAMIL_CORRECTIONS.items():
-            corrected = corrected.replace(wrong, correct)
+            pattern = r'(?<!\w)' + re.escape(wrong) + r'(?!\w)'
+            corrected = re.sub(pattern, correct, corrected)
         return corrected
 
     def correct_tanglish_only(self, text: str) -> str:
+        import re
         text = text.strip()
         corrected = text
         for wrong, correct in TANGLISH_CORRECTIONS.items():
-            corrected = corrected.replace(wrong, correct)
+            pattern = r'(?<!\w)' + re.escape(wrong) + r'(?!\w)'
+            corrected = re.sub(pattern, correct, corrected)
         return corrected
 
 

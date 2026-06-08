@@ -208,7 +208,15 @@ class RouterService:
     # Main pipeline entry point
     # ──────────────────────────────────────────────────────────────────────────
 
-    def process_audio(self, audio_input, target_lang: str = "ta", language: str | None = None, skip_vad: bool = False) -> dict:
+    def process_audio(
+        self,
+        audio_input,
+        target_lang: str = "ta",
+        language: str | None = None,
+        skip_vad: bool = False,
+        no_speech_threshold: float = None,
+        rms_gate: float = 0.005,
+    ) -> dict:
         """
         Full pipeline: raw audio array (float32, 16kHz) → subtitles + TTS queue.
 
@@ -254,7 +262,7 @@ class RouterService:
 
                 rms = float(np.sqrt(np.mean(audio_input ** 2)))
 
-                if rms < 0.005:
+                if rms < rms_gate:
 
                     print(
                         f"[Pipeline] RMS Gate: "
@@ -323,7 +331,11 @@ class RouterService:
 
             # ── 2. STT ───────────────────────────────────────────────────────────
             stt_start = time.perf_counter()
-            stt_result = self.stt_service.transcribe(audio_input, language=language)
+            stt_result = self.stt_service.transcribe(
+                audio_input, 
+                language=language, 
+                no_speech_threshold=no_speech_threshold
+            )
             stt_time = time.perf_counter() - stt_start
 
             if stt_result["is_silence"]:

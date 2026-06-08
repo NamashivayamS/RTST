@@ -82,7 +82,8 @@ class STTService:
     def transcribe(
         self,
         audio_input,            # str path or 1-D float32 numpy array at 16kHz
-        language: str | None = None
+        language: str | None = None,
+        no_speech_threshold: float | None = None
     ) -> dict:
         """
         Transcribes audio and returns a rich result dict.
@@ -132,12 +133,21 @@ class STTService:
             getattr(s, "no_speech_prob", 0.0) for s in segments
         ) / len(segments)
 
-        if avg_no_speech > self.NO_SPEECH_THRESHOLD:
-            print(f"[STT] Silence detected (no_speech_prob={avg_no_speech:.2f}) — skipping.")
+        threshold = no_speech_threshold if no_speech_threshold is not None else self.NO_SPEECH_THRESHOLD
+        if avg_no_speech > threshold:
+            print(f"[STT] Silence detected (no_speech_prob={avg_no_speech:.2f} > {threshold:.2f}) — skipping.")
             return self._empty("", info, silence=True)
 
         # ── Assemble full text ─────────────────────────────────────────────
         full_text = " ".join(seg.text.strip() for seg in segments).strip()
+
+        # Repetition hallucination check
+        words = full_text.split()
+        if len(words) >= 6:
+            unique_ratio = len(set(w.lower().strip('.,!?') for w in words)) / len(words)
+            if unique_ratio < 0.4:
+                print(f"[STT] Repetition hallucination: '{full_text[:50]}...'")
+                return self._empty(full_text, info, silence=True)
 
         # ── Hallucination filter ───────────────────────────────────────────
         if _is_hallucination(full_text):
@@ -171,30 +181,38 @@ class STTService:
 
         # If language is still unsupported, check confidence before falling back
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
-            if lang_prob < 0.70:
-                # Low confidence wrong language — retry with forced English
-                print(f"[STT] Low-confidence '{detected_lang}' ({lang_prob:.0%}) — retrying as English")
-                segments_gen2, info2 = self.model.transcribe(
-                    audio_input,
-                    beam_size=self.beam_size,
-                    language="en",
-                    vad_filter=False,
-                    condition_on_previous_text=False,
-                    temperature=0.0,
-                )
-                segments      = list(segments_gen2)
-                info          = info2
-                detected_lang = "en"
-                lang_prob     = info2.language_probability
-
-                # Re-run hallucination check on new transcription
-                full_text = " ".join(seg.text.strip() for seg in segments).strip()
-                if _is_hallucination(full_text):
-                    return self._empty(full_text, info, silence=True)
+            # Check if output text is actually Tamil script regardless of detected language
+            tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
+            tamil_ratio = tamil_chars / max(len(full_text), 1)
+            
+            if tamil_ratio > 0.3:
+                print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
+                detected_lang = "ta"
             else:
-                # High confidence wrong language — just fall back silently
-                print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
-                detected_lang = "en"
+                if lang_prob < 0.70:
+                    # Low confidence wrong language — retry with forced English
+                    print(f"[STT] Low-confidence '{detected_lang}' ({lang_prob:.0%}) — retrying as English")
+                    segments_gen2, info2 = self.model.transcribe(
+                        audio_input,
+                        beam_size=self.beam_size,
+                        language="en",
+                        vad_filter=False,
+                        condition_on_previous_text=False,
+                        temperature=0.0,
+                    )
+                    segments      = list(segments_gen2)
+                    info          = info2
+                    detected_lang = "en"
+                    lang_prob     = info2.language_probability
+    
+                    # Re-run hallucination check on new transcription
+                    full_text = " ".join(seg.text.strip() for seg in segments).strip()
+                    if _is_hallucination(full_text):
+                        return self._empty(full_text, info, silence=True)
+                else:
+                    # High confidence wrong language — just fall back silently
+                    print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
+                    detected_lang = "en"
 
         # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False

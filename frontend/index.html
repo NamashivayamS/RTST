@@ -781,6 +781,11 @@
           <span id="audioLabel"></span>
         </div>
         <button class="btn-clear" id="btnClear">↺ Clear</button>
+        <select id="envSelect" class="btn-clear" style="cursor:pointer; margin-left: 8px;">
+          <option value="quiet">🔇 Quiet Room</option>
+          <option value="conference">🎤 Conference</option>
+          <option value="noisy">🔊 Noisy</option>
+        </select>
       </div>
     </div>
 
@@ -884,6 +889,7 @@
         infoText.textContent = 'Ready — press to speak';
         
         ws.send(JSON.stringify({ action: 'config', target_lang: targetLang.value }));
+        ws.send(JSON.stringify({ action: 'config', environment: document.getElementById('envSelect').value }));
         
         targetLang.addEventListener('change', () => {
           if (ws?.readyState === WebSocket.OPEN) {
@@ -1349,6 +1355,16 @@
       nextStartTime = 0;
       playingNodes = 0;
       updateAudioIndicator();
+    });
+
+    document.getElementById('envSelect').addEventListener('change', (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                action: 'config',
+                environment: e.target.value
+            }));
+            console.log(`[Frontend] Environment set to: ${e.target.value}`);
+        }
     });
 
     // ─────────────────────────────────────────────────────────

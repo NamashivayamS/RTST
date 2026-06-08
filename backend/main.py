@@ -15,11 +15,13 @@ import queue
 import sys
 import os
 import traceback
-import traceback
 
 import numpy as np
+import torch
+from silero_vad import load_silero_vad
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -28,7 +30,8 @@ if PROJECT_ROOT not in sys.path:
 from config import (
     VAD_SILENCE_SEC, VAD_MIN_SPEECH_SEC,
     VAD_MAX_SPEECH_SEC, SAMPLE_RATE as CFG_SAMPLE_RATE,
-    ENABLE_TTS
+    ENABLE_TTS, ENVIRONMENT_PRESETS,
+    STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD
 )
 
 from backend.connection_manager import ConnectionManager
@@ -59,6 +62,15 @@ MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
 MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
 
 
+def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int) -> bool:
+    WINDOW_SIZE = 512
+    for i in range(0, len(audio) - WINDOW_SIZE + 1, WINDOW_SIZE):
+        window = audio[i : i + WINDOW_SIZE]
+        tensor = torch.tensor(window, dtype=torch.float32)
+        if vad_model(tensor, sample_rate).item() > 0.60:
+            return True
+    return False
+
 # ── Per-connection state ───────────────────────────────────────────────────────
 class ConnectionState:
     def __init__(self):
@@ -71,6 +83,17 @@ class ConnectionState:
         self.was_speaking    = False
         self.silence_samples = 0
         self.target_lang = "ta"
+        
+        self.vad_threshold         = VAD_THRESHOLD
+        self.silence_samples_limit = int(VAD_SILENCE_SEC * CFG_SAMPLE_RATE)
+        self.min_speech_samples    = int(VAD_MIN_SPEECH_SEC * CFG_SAMPLE_RATE)
+        self.max_speech_samples    = int(VAD_MAX_SPEECH_SEC * CFG_SAMPLE_RATE)
+        self.no_speech_threshold   = STT_NO_SPEECH_THRESHOLD
+        self.rms_gate              = 0.005
+        
+        # Load a separate lightweight Silero instance per connection
+        self._vad_model = load_silero_vad()
+        self._vad_model.reset_states()
 
     def push(self, chunk: np.ndarray):
         n   = len(chunk)
@@ -148,9 +171,12 @@ async def shutdown_event():
 
 
 # ── REST ───────────────────────────────────────────────────────────────────────
-@app.get("/")
-async def health_check():
-    return {"status": "ok"}
+@app.get("/", response_class=HTMLResponse)
+async def serve_frontend():
+    # Serve the NeuralTongue UI when someone visits the URL (like via ngrok)
+    html_path = os.path.join(PROJECT_ROOT, "frontend", "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 @app.get("/status")
 async def pipeline_status():
@@ -182,7 +208,20 @@ async def websocket_translate(websocket: WebSocket):
                 if ctrl.get("action") == "ping":
                     await manager.send_json(websocket, {"type": "pong"})
                 elif ctrl.get("action") == "config":
-                    state.target_lang = ctrl.get("target_lang", "ta")
+                    # Handle target language
+                    if "target_lang" in ctrl:
+                        state.target_lang = ctrl["target_lang"]
+                    
+                    # Handle environment preset
+                    if "environment" in ctrl:
+                        preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])
+                        if preset:
+                            state.vad_threshold       = preset["vad_threshold"]
+                            state.silence_samples_limit = int(CFG_SAMPLE_RATE * preset["silence_sec"])
+                            state.min_speech_samples  = int(CFG_SAMPLE_RATE * preset["min_speech_sec"])
+                            state.no_speech_threshold = preset["no_speech_threshold"]
+                            state.rms_gate            = preset["rms_gate"]
+                            print(f"[Config] Environment set to: {ctrl['environment']}")
                 continue
 
             # ── 250ms audio chunk ──────────────────────────────────────────
@@ -194,14 +233,12 @@ async def websocket_translate(websocket: WebSocket):
 
             # ── VAD: is there speech in this chunk? ────────────────────────
             try:
-                segments = await loop.run_in_executor(
+                has_speech = await loop.run_in_executor(
                     None,
-                    lambda: router.vad_service.get_speech_segments(
-                        chunk, return_seconds=False
-                    )
+                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, SAMPLE_RATE)
                 )
-                has_speech = len(segments) > 0
-            except Exception:
+            except Exception as e:
+                print(f"[VAD Error] {e}")   # temporary — remove after confirming fix
                 has_speech = False
 
             if has_speech:
@@ -212,7 +249,7 @@ async def websocket_translate(websocket: WebSocket):
                     state.was_speaking = True
                 state.silence_samples = 0
 
-                if state.utterance_length >= MAX_SPEECH_SAMPLES:
+                if state.utterance_length >= state.max_speech_samples:
                     utterance = state.get_utterance()
                     state.mark_utterance_start()  # reset for next utterance
                     state.active_tasks += 1
@@ -224,13 +261,13 @@ async def websocket_translate(websocket: WebSocket):
             else:
                 state.silence_samples += len(chunk)
 
-                if state.was_speaking and state.silence_samples >= SILENCE_SAMPLES:
+                if state.was_speaking and state.silence_samples >= state.silence_samples_limit:
                     # Speech just ended — fire pipeline if not already running
                     state.was_speaking = False
 
                     if (
-                        state.utterance_length >= MIN_SPEECH_SAMPLES
-                        and state.silence_samples >= SILENCE_SAMPLES
+                        state.utterance_length >= state.min_speech_samples
+                        and state.silence_samples >= state.silence_samples_limit
                     ):
                         utterance = state.get_utterance()
                         state.mark_utterance_start()  # reset for next utterance
@@ -271,7 +308,13 @@ async def _run_pipeline(
                 print(f"[Pipeline Task] GPU lock wait: {_lock_wait:.3f}s")
             
             result = await loop.run_in_executor(
-                None, lambda: router.process_audio(audio, target_lang=state.target_lang, skip_vad=True)
+                None, lambda: router.process_audio(
+                    audio, 
+                    target_lang=state.target_lang, 
+                    skip_vad=True,
+                    no_speech_threshold=state.no_speech_threshold,
+                    rms_gate=state.rms_gate
+                )
             )
 
         if not result.get("translated_text"):
