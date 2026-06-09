@@ -46,4 +46,8 @@ PHRASE_REPLACEMENTS = {
     # (If IndicTrans2 translates something accurately but awkwardly, override it here)
     "செயற்கை நுண்ணறிவு": "AI",
     "இயந்திர கற்றல்": "Machine Learning",
+    
+    # ── Distilled Model Hallucination Fixes ─────────────────────────────────
+    "க்கு இனிய காலை வணக்கம்": "அனைவருக்கும் இனிய காலை வணக்கம்",
+    "க்கும் இனிய காலை வணக்கம்": "அனைவருக்கும் இனிய காலை வணக்கம்",
 }

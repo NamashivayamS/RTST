@@ -1,4 +1,4 @@
-import pyarrow  # must load before datasets/f5_tts to prevent Windows DLL conflict
+import pyarrow   
 import os
 import torch
 import numpy as np
