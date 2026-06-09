@@ -156,6 +156,9 @@ async def startup_event():
     await loop.run_in_executor(
         None, lambda: router.translation_service.translate("வணக்கம்", "ta", "eng_Latn")
     )
+    await loop.run_in_executor(
+        None, lambda: router.translation_service.translate("नमस्ते", "hi", "eng_Latn")
+    )
     
     if ENABLE_TTS:
         print("[Backend] Warming up TTS...")
@@ -176,6 +179,19 @@ async def shutdown_event():
 
 
 # ── REST ───────────────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {
+        "status": "ready" if router is not None else "loading",
+        "models": {
+            "whisper": "loaded",
+            "translation": "loaded" if router else "pending",
+            "tts": "enabled" if ENABLE_TTS else "disabled",
+        },
+        "active_connections": len(manager.active_connections),
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+    }
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
     # Serve the NeuralTongue UI when someone visits the URL (like via ngrok)
@@ -334,6 +350,7 @@ async def _run_pipeline(
             "text":     result["translated_text"],
             "src_lang": result["src_lang"],
             "tgt_lang": result["tgt_lang"],
+            "confidence": result.get("language_prob", None),
         })
 
         # TTS streaming (re-enable when ENABLE_TTS = True)
@@ -364,7 +381,9 @@ async def _run_pipeline(
             await manager.send_bytes(websocket, audio_bytes)
 
         await manager.send_json(websocket, {
-            "type": "done", "total_chunks": chunks_sent
+            "type": "done",
+            "total_chunks": chunks_sent,
+            "latency_ms": round(result.get("total_time", 0) * 1000),
         })
 
     except Exception as e:

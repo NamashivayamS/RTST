@@ -15,6 +15,9 @@ PROPER_NOUN_CORRECTIONS = {
     "Namaskaram": "Namashivayam",
     "Namashrayam": "Namashivayam",
     "Namashwayam": "Namashivayam",
+    "Namah Shivaya": "Namashivayam",
+    "Navashavyam": "Namashivayam",
+    "Nashwayam":"Namashivayam",
     "Shivayam": "Namashivayam",
 
     "Thiru valluvar": "Thiruvalluvar",
@@ -93,6 +96,9 @@ PROPER_NOUN_CORRECTIONS = {
     "Raamraaj cotton": "Ramraj Cotton",
     "Ram raj": "Ramraj Cotton",
     "Ramroj": "Ramraj Cotton",
+
+    "Raamraj":"Ramraj",
+    "Ram raj": "Ramraj",
 
     "Zogo": "Zoho",
     "Soho": "Zoho",

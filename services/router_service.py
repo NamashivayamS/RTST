@@ -440,6 +440,8 @@ class RouterService:
                 "tgt_lang": translation_result["tgt_lang"],
                 "chunks": chunks,
                 "total_chunks": total,
+                "total_time": time.perf_counter() - pipeline_start,
+                "language_prob": stt_result.get("language_prob", 0.0),
             }
 
         

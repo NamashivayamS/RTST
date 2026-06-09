@@ -106,8 +106,7 @@ class STTService:
             # Provide context to bias the model toward Tamil and English evenly.
             # This helps language detection on very short sentences for both languages.
             initial_prompt=(
-                "Coimbatore, Tirupur, Chennai, Trichy, Madurai, Ramraj, Namashivayam. "
-                "Hello. Good morning. வணக்கம். நன்றி."
+                "வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you? Namashivayam, Ramraj, Tirupur."
             ),
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=False,             # Disabled to avoid double-VAD penalty
@@ -215,9 +214,17 @@ class STTService:
             # NEW: check if the text is actually Tamil script despite English detection
             tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
             tamil_ratio = tamil_chars / max(len(full_text), 1)
+            
+            # Check for Devanagari (Hindi)
+            deva_chars = sum(1 for ch in full_text if '\u0900' <= ch <= '\u097F')
+            deva_ratio = deva_chars / max(len(full_text), 1)
+            
             if tamil_ratio > 0.5:   # majority Tamil characters
                 print(f"[STT] Tamil script detected in 'en' output — reclassifying to 'ta'")
                 detected_lang = "ta"
+            elif deva_ratio > 0.5:
+                print(f"[STT] Devanagari script detected in 'en' output — reclassifying to 'hi'")
+                detected_lang = "hi"
 
         indictrans_lang = WHISPER_LANG_TO_INDICTRANS.get(detected_lang)
 
