@@ -49,6 +49,10 @@ def _sanitize_translation(text: str) -> str:
     # Strip leading punctuation artifacts (rogue period at start)
     text = re.sub(r'^\s*[\.।]\s*', '', text)
     
+    # Strip Tamil boundary artifacts ('க்கு' and 'வங்கம்')
+    text = re.sub(r'^க்கு\s*', '', text)
+    text = re.sub(r'^வங்கம்\s*,?\s*', '', text)
+    
     # Collapse multiple spaces
     text = re.sub(r'  +', ' ', text)
     

@@ -23,6 +23,12 @@ TAMIL_CONFUSED_AS = set()
 
 TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different scripts
 
+# ── Confidence-based retry thresholds ─────────────────────────────────────────
+RETRY_AVG_LOGPROB_THRESHOLD  = -1.0   # below this = poor transcription quality
+RETRY_COMPRESSION_RATIO_MAX  = 2.4    # above this = hallucination, reject not retry
+RETRY_NO_SPEECH_THRESHOLD    = 0.80   # above this = bad audio, worth retrying
+RETRY_BEAM_SIZE              = 10     # beam size for retry pass
+
 # Hallucination phrases Whisper emits for near-silence in Tamil context.
 # If the full transcription matches one of these, treat it as empty.
 HALLUCINATION_PATTERNS = [
@@ -31,7 +37,10 @@ HALLUCINATION_PATTERNS = [
     r"^\s*சரி\s*\.?\s*$",             # "ok" on silence
     r"^\s*[\u0B80-\u0BFF]{1,3}\s*$",  # 1-3 Tamil chars only (hallucinated syllable)
     r"^\s*[a-zA-Z]{1,4}\s*$",         # 1-4 Latin chars only
-    r"^\s*\.\.\.\s*$",                # ellipsis
+    r"^\s*\.+\s*$",                # ellipsis or multiple periods
+    r"(?i).*namashivayam.*ramraj.*tirupur.*", # Initial prompt leakage
+    r"(?i).*hello.*how are you.*",
+    r"(?i).*வணக்கம்.*எப்படி இருக்கிறீர்கள்.*",
 ]
 
 _HALLUCINATION_RE = [re.compile(p) for p in HALLUCINATION_PATTERNS]
@@ -120,6 +129,55 @@ class STTService:
 
         segments = list(segments_gen)
 
+        # ── Quality assessment ─────────────────────────────────────────────────
+        quality = self._assess_segment_quality(segments)
+
+        if quality["action"] == "reject":
+            # Hallucination detected — treat as silence, don't retry
+            print(f"[STT] Rejected: {quality['reason']}")
+            return self._empty("", info, silence=True)
+
+        if quality["action"] == "retry":
+            print(
+                f"[STT] Running retry pass "
+                f"(beam_size={RETRY_BEAM_SIZE}, temperature=0.2)"
+            )
+            retry_gen, retry_info = self.model.transcribe(
+                audio_input,
+                beam_size=RETRY_BEAM_SIZE,
+                language=language,
+                initial_prompt=None,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200,
+                ),
+                condition_on_previous_text=False,
+                temperature=0.2,   # add slight randomness to escape local optima
+            )
+            retry_segments = list(retry_gen)
+            retry_quality  = self._assess_segment_quality(retry_segments)
+
+            if retry_quality["action"] == "reject":
+                # Retry also hallucinated — discard
+                print("[STT] Retry also hallucinated — discarding")
+                return self._empty("", info, silence=True)
+
+            if retry_quality["avg_logprob"] > quality["avg_logprob"]:
+                print(
+                    f"[STT] Retry improved: "
+                    f"logprob {quality['avg_logprob']:.2f} "
+                    f"→ {retry_quality['avg_logprob']:.2f}"
+                )
+                segments = retry_segments
+                info = retry_info
+            else:
+                print(
+                    f"[STT] Retry did not improve "
+                    f"({retry_quality['avg_logprob']:.2f} ≤ "
+                    f"{quality['avg_logprob']:.2f}) — keeping pass 1"
+                )
+
         # ── Silence / no-speech guard ──────────────────────────────────────
         # Whisper reports no_speech_prob per segment. If ALL segments are
         # low-confidence or the overall frame is silent, skip processing.
@@ -169,6 +227,13 @@ class STTService:
             if tamil_ratio > 0.3:
                 print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
                 detected_lang = "ta"
+                
+        # If detected as Hindi but text has no Devanagari — Whisper echoed English prompt
+        if detected_lang == "hi":
+            deva_chars = sum(1 for ch in full_text if '\u0900' <= ch <= '\u097F')
+            if deva_chars == 0:
+                print(f"[STT] Hindi detected but no Devanagari script — reclassifying to 'en'")
+                detected_lang = "en"
 
         # If language is still unsupported, check confidence before falling back
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
@@ -259,6 +324,78 @@ class STTService:
             if re.match(r"^[a-zA-Z]+$", w.strip(".,!?;:"))
         )
         return latin_words / len(words)
+
+    def _assess_segment_quality(self, segments: list) -> dict:
+        """
+        Analyses Whisper segment quality metrics and returns one of three actions:
+          'accept'  — quality is good, continue normally
+          'retry'   — quality is poor but worth a second pass
+          'reject'  — hallucination detected, discard immediately
+
+        These three metrics are Whisper's own internal quality signals:
+          avg_logprob:       log probability of output tokens (lower = less confident)
+          compression_ratio: output/input length ratio (higher = repetition/hallucination)
+          no_speech_prob:    Whisper's own silence estimate per segment
+        """
+        if not segments:
+            return {
+                "action": "reject", "reason": "no segments",
+                "avg_logprob": 0.0, "max_compression": 0.0, "avg_no_speech": 1.0
+            }
+
+        avg_logprob = sum(
+            getattr(s, "avg_logprob", 0.0) for s in segments
+        ) / len(segments)
+
+        max_compression = max(
+            getattr(s, "compression_ratio", 1.0) for s in segments
+        )
+
+        avg_no_speech = sum(
+            getattr(s, "no_speech_prob", 0.0) for s in segments
+        ) / len(segments)
+
+        # High compression = repetition/hallucination.
+        # Retrying will produce the same garbage — reject outright.
+        if max_compression > RETRY_COMPRESSION_RATIO_MAX:
+            print(
+                f"[STT] Quality: REJECT "
+                f"(compression={max_compression:.2f} > {RETRY_COMPRESSION_RATIO_MAX})"
+            )
+            return {
+                "action": "reject",
+                "reason": f"hallucination (compression={max_compression:.2f})",
+                "avg_logprob": avg_logprob,
+                "max_compression": max_compression,
+                "avg_no_speech": avg_no_speech,
+            }
+
+        # Low logprob or high no_speech = poor quality but worth retrying
+        if (avg_logprob < RETRY_AVG_LOGPROB_THRESHOLD or
+                avg_no_speech > RETRY_NO_SPEECH_THRESHOLD):
+            print(
+                f"[STT] Quality: RETRY "
+                f"(logprob={avg_logprob:.2f}, no_speech={avg_no_speech:.2f})"
+            )
+            return {
+                "action": "retry",
+                "reason": f"low quality (logprob={avg_logprob:.2f}, no_speech={avg_no_speech:.2f})",
+                "avg_logprob": avg_logprob,
+                "max_compression": max_compression,
+                "avg_no_speech": avg_no_speech,
+            }
+
+        print(
+            f"[STT] Quality: ACCEPT "
+            f"(logprob={avg_logprob:.2f}, compression={max_compression:.2f})"
+        )
+        return {
+            "action": "accept",
+            "reason": "ok",
+            "avg_logprob": avg_logprob,
+            "max_compression": max_compression,
+            "avg_no_speech": avg_no_speech,
+        }
 
     # ──────────────────────────────────────────────────────────────────────
     # Helpers

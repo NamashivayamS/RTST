@@ -18,6 +18,11 @@ class RefinementService:
     def refine(self, text: str, tgt_lang: str = "tam_Taml") -> str:
         if not text.strip():
             return text
+            
+        # Strip leading punctuation/artifacts often left by translation models
+        # e.g., when "So, I think" becomes ", அது..."
+        text = text.lstrip(" ,.-")
+        
         if tgt_lang == "tam_Taml":
             return refine_translation(text)
         return text

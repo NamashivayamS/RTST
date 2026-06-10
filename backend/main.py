@@ -88,6 +88,7 @@ class ConnectionState:
         self.was_speaking    = False
         self.silence_samples = 0
         self.target_lang = "ta"
+        self.translation_context = []  # Stores last 5 English source sentences for context injection
         
         self.vad_threshold         = VAD_THRESHOLD
         self.silence_samples_limit = int(VAD_SILENCE_SEC * CFG_SAMPLE_RATE)
@@ -128,6 +129,46 @@ class ConnectionState:
                 self._ring[start:],
                 self._ring[:end]
             ])
+
+    def get_utterance_smart_split(self) -> np.ndarray:
+        """
+        Extracts the utterance but scans backwards up to 1.5 seconds 
+        to find a natural pause (lowest RMS) to avoid slicing a word in half.
+        Adjusts _utt_start so the remaining audio rolls over to the next utterance.
+        """
+        utterance = self.get_utterance()
+        
+        # We only try to split if the utterance is reasonably long
+        if len(utterance) < 2 * SAMPLE_RATE:
+            self.mark_utterance_start()
+            return utterance
+            
+        # Scan the last 1.0 seconds in 50ms windows
+        scan_length = int(1.0 * SAMPLE_RATE)
+        window_size = int(0.05 * SAMPLE_RATE)
+        
+        start_scan = max(0, len(utterance) - scan_length)
+        
+        min_rms = float('inf')
+        best_split_idx = len(utterance)
+        
+        for i in range(start_scan, len(utterance) - window_size, window_size):
+            window = utterance[i:i+window_size]
+            rms = float(np.sqrt(np.mean(window**2)))
+            if rms < min_rms:
+                min_rms = rms
+                best_split_idx = i + window_size // 2
+                
+        # Only split if we found a valid pause that doesn't truncate too much
+        if best_split_idx > SAMPLE_RATE:
+            split_utt = utterance[:best_split_idx]
+            rollback_samples = len(utterance) - best_split_idx
+            self._utt_start = self._total - rollback_samples
+            print(f"[VAD] Force-fire: Rolled back {rollback_samples/SAMPLE_RATE:.2f}s to find clean word boundary.")
+            return split_utt
+            
+        self.mark_utterance_start()
+        return utterance
 
     def mark_utterance_start(self):
         self._utt_start = self._total
@@ -231,8 +272,10 @@ async def websocket_translate(websocket: WebSocket):
                 elif ctrl.get("action") == "config":
                     # Handle target language
                     if "target_lang" in ctrl:
-                        state.target_lang = ctrl["target_lang"]
-                    
+                        if state.target_lang != ctrl["target_lang"]:
+                            state.target_lang = ctrl["target_lang"]
+                            state.translation_context.clear()
+                            print(f"[Config] Target language changed to: {state.target_lang} (Context wiped)")
                     # Handle environment preset
                     if "environment" in ctrl:
                         preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])
@@ -271,8 +314,7 @@ async def websocket_translate(websocket: WebSocket):
                 state.silence_samples = 0
 
                 if state.utterance_length >= state.max_speech_samples:
-                    utterance = state.get_utterance()
-                    state.mark_utterance_start()  # reset for next utterance
+                    utterance = state.get_utterance_smart_split()
                     if state.active_tasks >= MAX_PIPELINE_QUEUE:
                         print(f"[Pipeline] Replacing stale queued utterance with newer one")
                         state.pending_utterance = utterance
