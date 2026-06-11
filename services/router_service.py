@@ -86,6 +86,10 @@ class RouterService:
         )
         self.worker_thread.start()
 
+        # Split locks for Pipeline Concurrency
+        self.stt_lock = threading.Lock()
+        self.translation_lock = threading.Lock()
+
         print("RouterService: All services ready. Background TTS worker started.")
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -235,6 +239,8 @@ class RouterService:
         print(f"{'='*60}")
 
         pipeline_start = time.perf_counter()
+        _stt_lock_held = False
+        _translation_lock_held = False
 
         try:
             if isinstance(audio_input, np.ndarray):
@@ -245,8 +251,6 @@ class RouterService:
                     f"[AUDIO] Duration={duration_sec:.2f}s"
                 )        
 
-            # ── Flush any stale audio from the previous utterance ────────────────
-            self._flush_stale_audio()
 
             # ── 1. VAD gate ──────────────────────────────────────────────────────
             vad_start = time.perf_counter()
@@ -329,6 +333,14 @@ class RouterService:
             )        
 
             # ── 2. STT ───────────────────────────────────────────────────────────
+            if not self.stt_lock.acquire(timeout=10.0):
+                print(f"[REQUEST {request_id}] SKIPPED - STT lock timeout")
+                return self._empty_result()
+            _stt_lock_held = True
+
+            # ── Flush any stale audio from the previous utterance ────────────────
+            self._flush_stale_audio()
+
             stt_start = time.perf_counter()
             stt_result = self.stt_service.transcribe(
                 audio_input, 
@@ -336,6 +348,8 @@ class RouterService:
                 no_speech_threshold=no_speech_threshold
             )
             stt_time = time.perf_counter() - stt_start
+            self.stt_lock.release()   # Release STT lock early for the next request
+            _stt_lock_held = False
 
             if stt_result["is_silence"]:
                 print("[Pipeline] STT silence gate triggered — skipping.")
@@ -368,6 +382,11 @@ class RouterService:
                 print(f"[Pipeline] Punctuation skipped (Tamil input)")
 
             # ── 5. Translation ────────────────────────────────────────────────────
+            if not self.translation_lock.acquire(timeout=10.0):
+                print(f"[REQUEST {request_id}] SKIPPED - Translation lock timeout")
+                return self._empty_result()
+            _translation_lock_held = True
+
             translation_start = time.perf_counter()
             translation_result = self.translation_service.translate_auto(
                 punctuated_text,
@@ -375,6 +394,9 @@ class RouterService:
                 target_language=target_lang
             )
             translation_time = time.perf_counter() - translation_start
+            self.translation_lock.release()   # Release Translation lock
+            _translation_lock_held = False
+
             print(f"[Pipeline] Translated: {translation_result['translated_text']}")
 
             # ── 6. Refinement ─────────────────────────────────────────────────────
@@ -445,9 +467,14 @@ class RouterService:
 
         
         finally:
-            print(
-                f"[REQUEST {request_id}] COMPLETE"
-            )
+            print(f"[REQUEST {request_id}] COMPLETE")
+            if _stt_lock_held:
+                self.stt_lock.release()
+                _stt_lock_held = False
+            if _translation_lock_held:
+                self.translation_lock.release()
+                _translation_lock_held = False
+            print(f"[REQUEST {request_id}] LOCKS RELEASED")
 
     def process_translation(self, translated_text: str) -> dict:
         """

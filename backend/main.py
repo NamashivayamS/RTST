@@ -368,22 +368,16 @@ async def _run_pipeline(
     try:
         print(f"[Pipeline Task] Utterance duration: {len(audio)/SAMPLE_RATE:.2f}s")
         
-        _lock_wait_start = asyncio.get_event_loop().time()
-        async with gpu_lock:
-            _lock_wait = asyncio.get_event_loop().time() - _lock_wait_start
-            if _lock_wait > 0.05:   # only print if wait was meaningful (>50ms)
-                print(f"[Pipeline Task] GPU lock wait: {_lock_wait:.3f}s")
-            
-            result = await loop.run_in_executor(
-                None, lambda: router.process_audio(
-                    audio, 
-                    target_lang=state.target_lang, 
-                    skip_vad=True,
-                    no_speech_threshold=state.no_speech_threshold,
-                    rms_gate=state.rms_gate
-                )
+        # Concurrency is now handled internally by RouterService (stt_lock & translation_lock)
+        result = await loop.run_in_executor(
+            None, lambda: router.process_audio(
+                audio, 
+                target_lang=state.target_lang, 
+                skip_vad=True,
+                no_speech_threshold=state.no_speech_threshold,
+                rms_gate=state.rms_gate
             )
-
+        )
         if not result.get("translated_text"):
             return
 
