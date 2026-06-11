@@ -124,7 +124,7 @@ class TranslationService:
         text: str,
         src_lang: str,
         tgt_lang: str | None = None,
-        max_new_tokens: int = 256     # FIXED: was max_length (counted input+output)
+        max_new_tokens: int = 128     # FIXED: was max_length (counted input+output)
     ) -> str:
         if src_lang in LANG_CODE_MAP:
             src_lang = LANG_CODE_MAP[src_lang]
@@ -142,7 +142,7 @@ class TranslationService:
         texts: list[str],
         src_lang: str,
         tgt_lang: str,
-        max_new_tokens: int = 256
+        max_new_tokens: int = 128
     ) -> list[str]:
         if not texts:
             return []

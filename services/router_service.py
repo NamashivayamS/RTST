@@ -165,10 +165,9 @@ class RouterService:
             finally:
                 self.tts_input_queue.task_done()
 
-                # Optional VRAM cleanup.
-                # Benchmark before deciding whether this should remain enabled.
+                # Removed: torch.cuda.empty_cache() — causes GPU stall, no benefit
+                # with 1.86GB VRAM headroom
                 try:
-                    torch.cuda.empty_cache()
                     if torch.cuda.is_available():
                         used = torch.cuda.memory_allocated() / 1024**2
                         reserved = torch.cuda.memory_reserved() / 1024**2
