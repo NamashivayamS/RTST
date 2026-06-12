@@ -6,3 +6,4 @@ __pycache__/
 .env
 output_xtts.wav
 tests/audio/test_recording.wav
+*.jsonl

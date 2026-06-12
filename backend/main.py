@@ -51,6 +51,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from pydantic import BaseModel
+from datetime import datetime
+
+class FeedbackReport(BaseModel):
+    src_lang: str
+    tgt_lang: str
+    source_text: str
+    translated_text: str
+    issue_type: str
+    correction: str | None = None
+
+@app.post("/api/report")
+def report_mistake(report: FeedbackReport):
+    report_data = {
+        "timestamp": datetime.utcnow().isoformat(),
+        **report.dict()
+    }
+    # Append asynchronously to avoid blocking
+    with open(os.path.join(PROJECT_ROOT, "feedback_reports.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(report_data, ensure_ascii=False) + "\n")
+    return {"status": "success", "message": "Report logged"}
+
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
 
 manager = ConnectionManager()
@@ -384,6 +406,7 @@ async def _run_pipeline(
         await manager.send_json(websocket, {
             "type":     "subtitle",
             "text":     result["translated_text"],
+            "source_text": result.get("punctuated_text") or result.get("raw_text") or "",
             "src_lang": result["src_lang"],
             "tgt_lang": result["tgt_lang"],
             "confidence": result.get("language_prob", None),

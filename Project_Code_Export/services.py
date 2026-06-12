@@ -476,7 +476,7 @@ class RouterService:
 
         print(f"{'='*60}")
 
-        if not self.processing_lock.acquire(timeout=2.0):
+        if not self.processing_lock.acquire(timeout=10.0):
 
             print(
                 f"[REQUEST {request_id}] "

@@ -96,6 +96,7 @@ PROPER_NOUN_CORRECTIONS = {
     "Raamraaj cotton": "Ramraj Cotton",
     "Ram raj": "Ramraj Cotton",
     "Ramroj": "Ramraj Cotton",
+    "Ramraj Kampani": "Ramraj company",
 
     "Raamraj":"Ramraj",
     "Ram raj": "Ramraj",
