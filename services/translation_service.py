@@ -170,13 +170,30 @@ class TranslationService:
         ).to(self.device)
 
         with torch.no_grad():
+            import time
+            _t0 = time.perf_counter()
             generated_tokens = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 num_beams=2,
                 forced_bos_token_id=tokenizer.convert_tokens_to_ids(tgt_lang),
+                repetition_penalty=1.15,
+                no_repeat_ngram_size=3,
             )
-
+            _t1 = time.perf_counter()
+            
+            # Telemetry for token generation
+            input_tokens = inputs["input_ids"].shape[1] if "input_ids" in inputs else 0
+            gen_len = generated_tokens.shape[1] if len(generated_tokens.shape) > 1 else 0
+            stop_reason = "max_new_tokens" if gen_len >= max_new_tokens else "eos"
+            print(
+                f"[TRANSLATE] {src_lang}->{tgt_lang} "
+                f"input_tokens={input_tokens} "
+                f"output_tokens={gen_len} "
+                f"stop_reason={stop_reason} "
+                f"time={(_t1-_t0):.3f}s"
+            )
+            
         decoded = tokenizer.batch_decode(
             generated_tokens.cpu().tolist(),
             skip_special_tokens=True
