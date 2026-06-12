@@ -53,6 +53,9 @@ def _sanitize_translation(text: str) -> str:
     text = re.sub(r'^க்கு\s*', '', text)
     text = re.sub(r'^வங்கம்\s*,?\s*', '', text)
     
+    # Strip leading hyphen-word fragments (e.g. "-டைம்" from "real-time" boundary cuts)
+    text = re.sub(r'^-\S+\s*', '', text)
+    
     # Collapse multiple spaces
     text = re.sub(r'  +', ' ', text)
     
