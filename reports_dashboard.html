@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Audio Telemetry Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d0f14; color: #fff; padding: 30px; margin: 0; }
+        h1 { border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 30px; font-weight: 400; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; background: rgba(255,255,255,0.02); border-radius: 8px; overflow: hidden; }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid #222; }
+        th { background: #1a1d24; color: #888; font-weight: 600; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background: rgba(255,255,255,0.05); }
+        .correction { color: #ff4d6d; font-weight: 500; }
+        .source { color: #e0e0e0; }
+        .translated { color: #aaa; font-style: italic; }
+        .uid { font-family: 'Consolas', monospace; color: #00d4ff; background: rgba(0, 212, 255, 0.1); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+        .time { color: #666; font-size: 12px; }
+        audio { height: 35px; width: 220px; outline: none; border-radius: 30px; }
+        audio::-webkit-media-controls-panel { background-color: #1a1d24; color: #fff; }
+    </style>
+</head>
+<body>
+    <h1>🎙️ Audio Feedback Telemetry</h1>
+    <table>
+        <tr>
+            <th>Date / Time</th>
+            <th>ID</th>
+            <th>Original STT (Source)</th>
+            <th>Translated Output</th>
+            <th>User Correction</th>
+            <th>Audio Playback</th>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>09:58:44</span></td>
+            <td><span class="uid">utt_838e1a18</span></td>
+            <td class="source">I have implemented a step for a future.</td>
+            <td class="translated">ரிய ஒரு எதிர்கால நடவடிக்கையை நான் எடுத்துள்ளேன்.</td>
+            <td class="correction">ரிய what is it</td>
+            <td><audio controls src="decrypted_audio/2026-06-12/utt_838e1a18.wav"></audio></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>07:59:43</span></td>
+            <td><span class="uid">utt_09181629</span></td>
+            <td class="source">I am currently focusing on reducing latency.</td>
+            <td class="translated">தாமதத்தைக் குறைப்பதில் நான் தற்போது கவனம் செலுத்துகிறேன்.</td>
+            <td class="correction">summa</td>
+            <td><audio controls src="decrypted_audio/2026-06-12/utt_09181629.wav"></audio></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>07:54:54</span></td>
+            <td><span class="uid">utt_0a6bf9b7</span></td>
+            <td class="source">Kannada and Telugu.</td>
+            <td class="translated">Kannada and Telugu.</td>
+            <td class="correction">What happend</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>07:06:18</span></td>
+            <td><span class="uid">utt_cfd1fd85</span></td>
+            <td class="source">I am currently focused on improving the algorithm.</td>
+            <td class="translated">தற்போது வழிமுறையை மேம்படுத்துவதில் கவனம் செலுத்துகிறேன்.</td>
+            <td class="correction">alogorith != system (Just for testing)</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>07:02:01</span></td>
+            <td><span class="uid">utt_db7380d3</span></td>
+            <td class="source">I am Kureshi, introducing you latency and I am now...</td>
+            <td class="translated">ஃ நான் குரேஷி, தாமதத்தை உங்களுக்கு அறிமுகப்படுத்துகிறேன், இப்போது நான்...</td>
+            <td class="correction">I said something, it detected something</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>06:25:26</span></td>
+            <td><span class="uid">utt_5a1d289b</span></td>
+            <td class="source">Can you understand my speaking English in English?</td>
+            <td class="translated">ஆங்கிலத்தில் பேசுவது உங்களுக்குப் புரிகிறதா?</td>
+            <td class="correction">i said "People can understande english"</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>04:25:43</span></td>
+            <td><span class="uid">N/A</span></td>
+            <td class="source">How are you?</td>
+            <td class="translated">எப்படி இருக்கிறீர்கள்?</td>
+            <td class="correction">i said "reduce the errors"</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+        <tr>
+            <td class="time">2026-06-12<br><span style='color:#444'>04:10:23</span></td>
+            <td><span class="uid">N/A</span></td>
+            <td class="source">Thank you, Ramraj.</td>
+            <td class="translated">நன்றி ராமராஜ்.</td>
+            <td class="correction">i said increase accuracy</td>
+            <td><span style='color:#444'>No Audio</span></td>
+        </tr>
+    </table>
+</body>
+</html>

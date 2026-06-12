@@ -15,6 +15,11 @@ import queue
 import sys
 import os
 import traceback
+import uuid
+import time
+import scipy.io.wavfile
+import nacl.public
+import nacl.utils
 
 import numpy as np
 import torch
@@ -54,7 +59,11 @@ app.add_middleware(
 from pydantic import BaseModel
 from datetime import datetime
 
+os.makedirs(os.path.join(PROJECT_ROOT, "temp_audio"), exist_ok=True)
+os.makedirs(os.path.join(PROJECT_ROOT, "secure_vault"), exist_ok=True)
+
 class FeedbackReport(BaseModel):
+    utterance_id: str
     src_lang: str
     tgt_lang: str
     source_text: str
@@ -68,10 +77,43 @@ def report_mistake(report: FeedbackReport):
         "timestamp": datetime.utcnow().isoformat(),
         **report.dict()
     }
-    # Append asynchronously to avoid blocking
+    
+    # ── Move Encrypted Audio ──
+    temp_enc_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{report.utterance_id}.wav.enc")
+    vault_path = os.path.join(PROJECT_ROOT, "secure_vault", f"{report.utterance_id}.wav.enc")
+    
+    if os.path.exists(temp_enc_path):
+        try:
+            import shutil
+            shutil.move(temp_enc_path, vault_path)
+            report_data["audio_file"] = f"secure_vault/{report.utterance_id}.wav.enc"
+        except Exception as e:
+            print(f"[Telemetry] Move failed: {e}")
+    else:
+        print(f"[Telemetry] Warning: Audio for {report.utterance_id} expired or not found.")
+
     with open(os.path.join(PROJECT_ROOT, "feedback_reports.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(report_data, ensure_ascii=False) + "\n")
     return {"status": "success", "message": "Report logged"}
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(garbage_collector_loop())
+
+async def garbage_collector_loop():
+    while True:
+        try:
+            temp_dir = os.path.join(PROJECT_ROOT, "temp_audio")
+            now = time.time()
+            for filename in os.listdir(temp_dir):
+                if not filename.endswith(".enc"): continue
+                filepath = os.path.join(temp_dir, filename)
+                if os.path.getmtime(filepath) < now - 600: # 10 minutes
+                    os.remove(filepath)
+                    print(f"[GC] Deleted expired encrypted chunk {filename}")
+        except Exception as e:
+            pass
+        await asyncio.sleep(60)
 
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
 
@@ -390,6 +432,30 @@ async def _run_pipeline(
     try:
         print(f"[Pipeline Task] Utterance duration: {len(audio)/SAMPLE_RATE:.2f}s")
         
+        # ── Zero-Disk Encryption Buffer ──
+        utt_id = f"utt_{uuid.uuid4().hex[:8]}"
+        enc_temp_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{utt_id}.wav.enc")
+        
+        def _encrypt_and_save_audio():
+            import io
+            # 1. Write raw float32 audio to a RAM buffer
+            wav_io = io.BytesIO()
+            scipy.io.wavfile.write(wav_io, SAMPLE_RATE, audio)
+            raw_audio = wav_io.getvalue()
+            
+            # 2. Encrypt the bytes in RAM
+            with open(os.path.join(PROJECT_ROOT, "server_public.key"), "rb") as kf:
+                pub_key = nacl.public.PublicKey(kf.read())
+            box = nacl.public.SealedBox(pub_key)
+            encrypted_audio = box.encrypt(raw_audio)
+            
+            # 3. Save only the encrypted bytes to the hard drive
+            with open(enc_temp_path, "wb") as f:
+                f.write(encrypted_audio)
+
+        # Run encryption in background thread so it doesn't block WebSockets
+        await loop.run_in_executor(None, _encrypt_and_save_audio)
+        
         # Concurrency is now handled internally by RouterService (stt_lock & translation_lock)
         result = await loop.run_in_executor(
             None, lambda: router.process_audio(
@@ -405,6 +471,7 @@ async def _run_pipeline(
 
         await manager.send_json(websocket, {
             "type":     "subtitle",
+            "utterance_id": utt_id,
             "text":     result["translated_text"],
             "source_text": result.get("punctuated_text") or result.get("raw_text") or "",
             "src_lang": result["src_lang"],

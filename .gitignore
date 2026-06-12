@@ -7,3 +7,7 @@ __pycache__/
 output_xtts.wav
 tests/audio/test_recording.wav
 *.jsonl
+*.key
+temp_audio/
+secure_vault/
+decrypted_audio/
