@@ -12,6 +12,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from config import ENABLE_TTS
+
 # ── IMPORTANT: Load CPU-bound services BEFORE any CUDA model ──────────────────
 # PunctuationModel silently crashes if Whisper has already claimed the CUDA
 # context on Windows. Maintain this import order strictly.
@@ -404,9 +406,6 @@ class RouterService:
             print(f"[Pipeline] Refined   : {refined_text}")
 
             # ── 7. Chunk + queue for TTS ──────────────────────────────────────────
-            # chunks = self.chunking_service.split_text_for_tts(refined_text)
-            #total  = len(chunks)
-            ENABLE_TTS = False
             if ENABLE_TTS:
                 chunks = self.chunking_service.split_text_for_tts(
                     refined_text
