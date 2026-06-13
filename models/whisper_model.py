@@ -7,10 +7,19 @@ MODEL_SIZE = "medium"
 
 print(f"\nLoading Faster-Whisper Model ({MODEL_SIZE} on {DEVICE})...")
 
-whisper_model = WhisperModel(
-    MODEL_SIZE,
-    device=DEVICE,
-    compute_type="int8"
-)
+try:
+    whisper_model = WhisperModel(
+        MODEL_SIZE,
+        device=DEVICE,
+        compute_type="int8",
+        local_files_only=True
+    )
+except Exception:
+    whisper_model = WhisperModel(
+        MODEL_SIZE,
+        device=DEVICE,
+        compute_type="int8",
+        local_files_only=False
+    )
 
 print("Whisper Model Loaded Successfully!")

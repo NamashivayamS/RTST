@@ -2,22 +2,26 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import os
+import os
 import torch
 import re
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import sentencepiece as spm
+from huggingface_hub import snapshot_download
+import ctranslate2
 from IndicTransToolkit.processor import IndicProcessor
 
 MODEL_REGISTRY = {
-    "eng_Latn→tam_Taml": "ai4bharat/indictrans2-en-indic-dist-200M",
-    "eng_Latn→hin_Deva": "ai4bharat/indictrans2-en-indic-dist-200M",
-    "eng_Latn→tel_Telu": "ai4bharat/indictrans2-en-indic-dist-200M",
-    "eng_Latn→kan_Knda": "ai4bharat/indictrans2-en-indic-dist-200M",
-    "eng_Latn→mal_Mlym": "ai4bharat/indictrans2-en-indic-dist-200M",
-    "tam_Taml→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
-    "hin_Deva→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
-    "tel_Telu→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
-    "kan_Knda→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
-    "mal_Mlym→eng_Latn": "ai4bharat/indictrans2-indic-en-dist-200M",
+    "eng_Latn→tam_Taml": "adalat-ai/ct2-rotary-indictrans2-en-indic-dist-200M",
+    "eng_Latn→hin_Deva": "adalat-ai/ct2-rotary-indictrans2-en-indic-dist-200M",
+    "eng_Latn→tel_Telu": "adalat-ai/ct2-rotary-indictrans2-en-indic-dist-200M",
+    "eng_Latn→kan_Knda": "adalat-ai/ct2-rotary-indictrans2-en-indic-dist-200M",
+    "eng_Latn→mal_Mlym": "adalat-ai/ct2-rotary-indictrans2-en-indic-dist-200M",
+    "tam_Taml→eng_Latn": "adalat-ai/ct2-rotary-indictrans2-indic-en-dist-200M",
+    "hin_Deva→eng_Latn": "adalat-ai/ct2-rotary-indictrans2-indic-en-dist-200M",
+    "tel_Telu→eng_Latn": "adalat-ai/ct2-rotary-indictrans2-indic-en-dist-200M",
+    "kan_Knda→eng_Latn": "adalat-ai/ct2-rotary-indictrans2-indic-en-dist-200M",
+    "mal_Mlym→eng_Latn": "adalat-ai/ct2-rotary-indictrans2-indic-en-dist-200M",
 }
 
 LANG_CODE_MAP = {
@@ -89,7 +93,8 @@ class TranslationService:
 
     def __init__(self):
         self._models: dict = {}
-        self._tokenizers: dict = {}
+        self._sp_src: dict = {}
+        self._sp_tgt: dict = {}
         self.ip = IndicProcessor(inference=True)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print("TranslationService initialized. Models will load on first use.")
@@ -110,17 +115,37 @@ class TranslationService:
         if model_name in self._models:
             return
 
-        print(f"TranslationService: Loading model '{model_name}'...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            torch_dtype=torch.float16   # ~400MB VRAM saving vs float32
-        ).to(self.device)
+        print(f"TranslationService: Downloading/Loading model '{model_name}'...")
+        
+        # 1. Download/Locate the model snapshot from HuggingFace
+        try:
+            model_path = snapshot_download(model_name, local_files_only=True)
+        except Exception:
+            model_path = snapshot_download(model_name)
+        
+        # 2. Locate the specific directory containing 'model.bin'
+        if "en-indic" in model_name:
+            ct2_model_dir = os.path.join(model_path, "en-indic-200m-ct2", "ctranslate2_model")
+        else:
+            ct2_model_dir = os.path.join(model_path, "indic-en-200m-ct2", "ctranslate2_model")
+            
+        # 3. Load the SentencePiece tokenizers from the original AI4Bharat repo
+        original_model_name = "ai4bharat/indictrans2-en-indic-dist-200M" if "en-indic" in model_name else "ai4bharat/indictrans2-indic-en-dist-200M"
+        try:
+            ai4_path = snapshot_download(original_model_name, allow_patterns=["*model.SRC", "*model.TGT"], local_files_only=True)
+        except Exception:
+            ai4_path = snapshot_download(original_model_name, allow_patterns=["*model.SRC", "*model.TGT"])
+        sp_src = spm.SentencePieceProcessor(model_file=os.path.join(ai4_path, "model.SRC"))
+        sp_tgt = spm.SentencePieceProcessor(model_file=os.path.join(ai4_path, "model.TGT"))
+        
+        # 4. Load the C++ CTranslate2 Engine with int8 quantization
+        compute_type = "int8_float16" if self.device == "cuda" else "int8"
+        model = ctranslate2.Translator(ct2_model_dir, device=self.device, compute_type=compute_type)
 
-        self._tokenizers[model_name] = tokenizer
+        self._sp_src[model_name] = sp_src
+        self._sp_tgt[model_name] = sp_tgt
         self._models[model_name] = model
-        print(f"TranslationService: Model '{model_name}' loaded successfully.")
+        print(f"TranslationService: CTranslate2 Engine '{model_name}' loaded successfully.")
 
     def translate(
         self,
@@ -160,46 +185,54 @@ class TranslationService:
 
         key = self._pair_key(src_lang, tgt_lang)
         model_name = MODEL_REGISTRY.get(key)
-        tokenizer = self._tokenizers[model_name]
+        sp_src = self._sp_src[model_name]
+        sp_tgt = self._sp_tgt[model_name]
         model = self._models[model_name]
 
         processed = self.ip.preprocess_batch(texts, src_lang=src_lang, tgt_lang=tgt_lang)
 
-        inputs = tokenizer(
-            processed,
-            truncation=True,
-            padding="longest",
-            return_tensors="pt"
-        ).to(self.device)
-
-        with torch.no_grad():
-            import time
-            _t0 = time.perf_counter()
-            generated_tokens = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                num_beams=2,
-                forced_bos_token_id=tokenizer.convert_tokens_to_ids(tgt_lang),
-                repetition_penalty=1.15,
-                no_repeat_ngram_size=3,
-            )
-            _t1 = time.perf_counter()
+        import time
+        _t0 = time.perf_counter()
+        
+        # Convert text to SentencePiece string tokens for CTranslate2
+        # IndicProcessor wraps text like: 'eng_Latn tam_Taml Hello'
+        # We must split the tags, encode the text, and prepend the tags as list elements
+        source_tokens_batch = []
+        for p_text in processed:
+            parts = p_text.split(" ", 2)
+            if len(parts) >= 3:
+                s_lang, t_lang, core_text = parts[0], parts[1], parts[2]
+            else:
+                s_lang, t_lang, core_text = src_lang, tgt_lang, p_text
             
-            # Telemetry for token generation
-            input_tokens = inputs["input_ids"].shape[1] if "input_ids" in inputs else 0
-            gen_len = generated_tokens.shape[1] if len(generated_tokens.shape) > 1 else 0
-            stop_reason = "max_new_tokens" if gen_len >= max_new_tokens else "eos"
-            print(
-                f"[TRANSLATE] {src_lang}->{tgt_lang} "
-                f"input_tokens={input_tokens} "
-                f"output_tokens={gen_len} "
-                f"stop_reason={stop_reason} "
-                f"time={(_t1-_t0):.3f}s"
-            )
+            sp_tokens = sp_src.encode(core_text, out_type=str)
+            source_tokens_batch.append([s_lang, t_lang] + sp_tokens)
             
-        decoded = tokenizer.batch_decode(
-            generated_tokens.cpu().tolist(),
-            skip_special_tokens=True
+        # Generate using CTranslate2 C++ Engine
+        results = model.translate_batch(
+            source_tokens_batch,
+            batch_type="tokens",
+            max_decoding_length=max_new_tokens,
+            beam_size=2, 
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.15
+        )
+        
+        _t1 = time.perf_counter()
+        
+        decoded = []
+        for res in results:
+            target_tokens = res.hypotheses[0]
+            # Decode using target SentencePiece model
+            decoded_text = sp_tgt.decode(target_tokens)
+            decoded.append(decoded_text)
+            
+        # Telemetry for token generation
+        input_tokens = len(source_tokens_batch[0]) if source_tokens_batch else 0
+        print(
+            f"[TRANSLATE-CT2] {src_lang}->{tgt_lang} "
+            f"input_tokens={input_tokens} "
+            f"time={(_t1-_t0):.3f}s"
         )
 
         results = self.ip.postprocess_batch(decoded, lang=tgt_lang)
