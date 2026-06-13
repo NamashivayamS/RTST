@@ -1205,6 +1205,29 @@
         modelPill.style.display = 'none';
         if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
         awaitingResponse = false;
+        
+        // Safety: If server crashes mid-speech, forcefully stop the mic
+        if (recording) {
+            recording = false;
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+            if (audioCtx) {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            const micBtn = document.getElementById('micBtn');
+            micBtn.classList.remove('recording');
+            micBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.87 3.13 7 7 7v3h4v-3c3.87 0 7-3.13 7-7h-2z"/></svg>';
+            infoText.textContent = 'Connection lost...';
+        }
+        
+        // Auto-Reconnect loop
         setTimeout(connect, 3000);
       };
 

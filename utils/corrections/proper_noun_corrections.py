@@ -8,6 +8,11 @@ Format: "Whisper's wrong output": "Correct spelling"
 """
 
 PROPER_NOUN_CORRECTIONS = {
+    #-----Detected while making the project -----
+    "Kureshi": "Accuracy",
+    "MEC": "MSc",
+    "Iruppur":"Tiruppur",
+
     # ── People Names ──────────────────────────────────────────────────────
     "Namah Shivayam": "Namashivayam",
     "Namishwamy": "Namashivayam",
@@ -18,6 +23,7 @@ PROPER_NOUN_CORRECTIONS = {
     "Namah Shivaya": "Namashivayam",
     "Navashavyam": "Namashivayam",
     "Nashwayam":"Namashivayam",
+    "Namashvayam" :"Namashivayam",
     "Shivayam": "Namashivayam",
 
     "Thiru valluvar": "Thiruvalluvar",
@@ -95,7 +101,7 @@ PROPER_NOUN_CORRECTIONS = {
     "Ram raj coten": "Ramraj Cotton",
     "Raamraaj cotton": "Ramraj Cotton",
     "Ram raj": "Ramraj Cotton",
-    "Ramroj": "Ramraj Cotton",
+    "Ramroj": "Ramraj",
     "Ramraj Kampani": "Ramraj company",
 
     "Raamraj":"Ramraj",
