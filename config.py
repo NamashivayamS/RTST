@@ -1,3 +1,8 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # config.py
 """
 Central configuration for all tunable thresholds and logic gates.
@@ -43,9 +48,9 @@ ENVIRONMENT_PRESETS = {
     },
 }
 
-POSTGRES_HOST = "localhost"
-POSTGRES_DB = "ispeak_global"
-POSTGRES_USER = "postgres"
-POSTGRES_PASSWORD = "1234"
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "ispeak_global")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "1234")
 
 DEFAULT_DEPARTMENT_ID = "b6f8468a-477c-4045-a696-c402afae99a5"
