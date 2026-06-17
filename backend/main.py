@@ -140,7 +140,7 @@ def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int, threshold: flo
 # ── Per-connection state ───────────────────────────────────────────────────────
 class ConnectionState:
     def __init__(self):
-        self._maxlen    = SAMPLE_RATE * RING_BUFFER_SEC  # 480,000 samples
+        self._maxlen    = CFG_SAMPLE_RATE * RING_BUFFER_SEC  # 480,000 samples
         self._ring      = np.zeros(self._maxlen, dtype=np.float32)  # pre-allocated
         self._write     = 0      # where to write next
         self._total     = 0      # total samples ever received
@@ -202,13 +202,13 @@ class ConnectionState:
         utterance = self.get_utterance()
         
         # We only try to split if the utterance is reasonably long
-        if len(utterance) < 2 * SAMPLE_RATE:
+        if len(utterance) < 2 * CFG_SAMPLE_RATE:
             self.mark_utterance_start()
             return utterance
             
         # Scan the last 1.0 seconds in 50ms windows
-        scan_length = int(1.0 * SAMPLE_RATE)
-        window_size = int(0.05 * SAMPLE_RATE)
+        scan_length = int(1.0 * CFG_SAMPLE_RATE)
+        window_size = int(0.05 * CFG_SAMPLE_RATE)
         
         start_scan = max(0, len(utterance) - scan_length)
         
@@ -223,11 +223,11 @@ class ConnectionState:
                 best_split_idx = i + window_size // 2
                 
         # Only split if we found a valid pause that doesn't truncate too much
-        if best_split_idx > SAMPLE_RATE:
+        if best_split_idx > CFG_SAMPLE_RATE:
             split_utt = utterance[:best_split_idx]
             rollback_samples = len(utterance) - best_split_idx
             self._utt_start = self._total - rollback_samples
-            print(f"[VAD] Force-fire: Rolled back {rollback_samples/SAMPLE_RATE:.2f}s to find clean word boundary.")
+            print(f"[VAD] Force-fire: Rolled back {rollback_samples/CFG_SAMPLE_RATE:.2f}s to find clean word boundary.")
             return split_utt
             
         self.mark_utterance_start()
@@ -371,7 +371,7 @@ async def websocket_translate(websocket: WebSocket):
             try:
                 has_speech = await loop.run_in_executor(
                     None,
-                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, SAMPLE_RATE, state.vad_threshold)
+                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, CFG_SAMPLE_RATE, state.vad_threshold)
                 )
             except Exception as e:
                 print(f"[VAD Error] {e}")   # temporary — remove after confirming fix
@@ -438,7 +438,7 @@ async def _run_pipeline(
     continues receiving new audio chunks while this runs.
     """
     try:
-        print(f"[Pipeline Task] Utterance duration: {len(audio)/SAMPLE_RATE:.2f}s")
+        print(f"[Pipeline Task] Utterance duration: {len(audio)/CFG_SAMPLE_RATE:.2f}s")
         
         # ── Zero-Disk Encryption Buffer ──
         utt_id = f"utt_{uuid.uuid4().hex[:8]}"
@@ -448,7 +448,7 @@ async def _run_pipeline(
             import io
             # 1. Write raw float32 audio to a RAM buffer
             wav_io = io.BytesIO()
-            scipy.io.wavfile.write(wav_io, SAMPLE_RATE, audio)
+            scipy.io.wavfile.write(wav_io, CFG_SAMPLE_RATE, audio)
             raw_audio = wav_io.getvalue()
             
             # 2. Encrypt the bytes in RAM
