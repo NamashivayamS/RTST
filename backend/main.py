@@ -37,11 +37,13 @@ from config import (
     VAD_SILENCE_SEC, VAD_MIN_SPEECH_SEC,
     VAD_MAX_SPEECH_SEC, SAMPLE_RATE as CFG_SAMPLE_RATE,
     ENABLE_TTS, ENVIRONMENT_PRESETS,
-    STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD
+    STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD,
+    DEFAULT_DEPARTMENT_ID
 )
 
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
+from database.queries import create_meeting, save_utterance
 
 app = FastAPI(
     title="RealTimeSpeechTranslator",
@@ -96,9 +98,6 @@ def report_mistake(report: FeedbackReport):
         f.write(json.dumps(report_data, ensure_ascii=False) + "\n")
     return {"status": "success", "message": "Report logged"}
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(garbage_collector_loop())
 
 async def garbage_collector_loop():
     while True:
@@ -122,7 +121,6 @@ router: RouterService | None = None
 gpu_lock: asyncio.Lock | None = None
 
 # ── Streaming constants ────────────────────────────────────────────────────────
-SAMPLE_RATE        = 16000
 RING_BUFFER_SEC    = 30                          # how much audio to keep
 SILENCE_SAMPLES    = int(CFG_SAMPLE_RATE * VAD_SILENCE_SEC)
 MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
@@ -152,6 +150,7 @@ class ConnectionState:
         self.was_speaking    = False
         self.silence_samples = 0
         self.target_lang = "ta"
+        self.meeting_id = None
         self.translation_context = []  # Stores last 5 English source sentences for context injection
         
         self.vad_threshold         = VAD_THRESHOLD
@@ -249,6 +248,7 @@ async def startup_event():
     global gpu_lock
     if router is not None:
         return
+    asyncio.create_task(garbage_collector_loop())
     gpu_lock = asyncio.Lock()
     print("[Backend] Loading pipeline models...")
     loop = asyncio.get_event_loop()
@@ -318,6 +318,14 @@ async def websocket_translate(websocket: WebSocket):
     await manager.connect(websocket)
     state = ConnectionState()
     loop  = asyncio.get_event_loop()
+
+    state.meeting_id = await loop.run_in_executor(
+        None, lambda: create_meeting(
+            title="Live Translation Session",
+            department_id=DEFAULT_DEPARTMENT_ID
+        )
+    )
+    print(f"[MEETING] Created for WS: {state.meeting_id}")
 
     try:
         while True:
@@ -468,6 +476,22 @@ async def _run_pipeline(
         )
         if not result.get("translated_text"):
             return
+
+        def _save():
+            try:
+                save_utterance(
+                    meeting_id=state.meeting_id,
+                    source_text=result.get("punctuated_text") or result.get("raw_text") or "",
+                    translated_text=result.get("translated_text", ""),
+                    source_language=result.get("src_lang", ""),
+                    target_language=result.get("tgt_lang", ""),
+                    total_latency_ms=int(result.get("total_time", 0) * 1000)
+                )
+            except Exception as e:
+                print(f"[DB Error] Failed to save utterance: {e}")
+
+        # Fire and forget in the background thread (no asyncio.create_task needed for Futures)
+        loop.run_in_executor(None, _save)
 
         await manager.send_json(websocket, {
             "type":     "subtitle",

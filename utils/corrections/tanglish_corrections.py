@@ -3,6 +3,7 @@ TANGLISH_CORRECTIONS = {
     # ===== Stable English loanwords in Tamil script =====
     # Safe because they are usually standalone complete words
     "சோ": "so",
+    "ஃப்ரியா":"Free ah",
     "மீட்டிங்": "meeting",
     "மீட்டின்": "meeting",
     "ஜாய்ன்": "join",

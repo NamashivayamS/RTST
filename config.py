@@ -42,3 +42,10 @@ ENVIRONMENT_PRESETS = {
         "rms_gate":            0.015,
     },
 }
+
+POSTGRES_HOST = "localhost"
+POSTGRES_DB = "ispeak_global"
+POSTGRES_USER = "postgres"
+POSTGRES_PASSWORD = "1234"
+
+DEFAULT_DEPARTMENT_ID = "b6f8468a-477c-4045-a696-c402afae99a5"
