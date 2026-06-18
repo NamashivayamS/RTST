@@ -172,7 +172,8 @@ function connectWebSocket() {
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.host || 'localhost:8000';
-    const wsUrl = `${protocol}//${host}/ws/translate`;
+    const TOKEN = "2ff2ad074c8dfe1fb67948e1d49d9f2687f4b28439b210a443688c95427da087";
+    const wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
 
     ws = new WebSocket(wsUrl);
 

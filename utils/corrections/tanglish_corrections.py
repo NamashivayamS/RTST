@@ -2,6 +2,41 @@ TANGLISH_CORRECTIONS = {
 
     # ===== Stable English loanwords in Tamil script =====
     # Safe because they are usually standalone complete words
+    "கிராமராஜ் காட்டணன்": "Ramraj Cotton",
+    "வேட்டினிருவனத்தில்": "Dhoti Company",
+    "ராமராஜ்": "Ramraj",
+    "காட்டணன்": "Cotton",
+    "வேட்டி": "Dhoti",
+    "எட்டாட்டு": "Eight Eight",
+    "கடத்தை": "Shop",
+    "கடை": "Shop",
+    "கடையை": "Shop",
+    "மணிக்கு": "at",
+    "மெல்வாக்கில்": "By the hour",
+    "மணிவாக்கில்": "By the hour",
+    "சுத்தியிருக்கும்": "Surroundings",
+    "திருப்பு": "Tiruppur",
+    "திருப்புர்": "Tiruppur",
+    "கிராவப்புர": "Village side",
+    "னேஸ் வளர்கள்":"Weavers",
+    "நெசவாளர்கள்": "Weavers",
+    "பண்ண": "made",
+    "பண்ணி": "made",
+    "பண்ணிய": "made",
+    "பண்ணியிருக்க": "made",
+    "பண்ணியிருக்கேன": "made",
+    "பண்ணியிருக்கேனா": "made",
+    "பண்ணியிருக்கேன": "made",
+    "பண்ணியிருக்கேனா": "made",
+    
+    
+
+        
+
+
+
+
+
     "சோ": "so",
     "ஃப்ரியா":"Free ah",
     "மீட்டிங்": "meeting",

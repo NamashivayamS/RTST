@@ -11,3 +11,6 @@ tests/audio/test_recording.wav
 temp_audio/
 secure_vault/
 decrypted_audio/
+
+logs/
+whisper-tamil-medium-ct2/

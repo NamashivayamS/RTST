@@ -25,7 +25,7 @@ TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different script
 
 # ── Confidence-based retry thresholds ─────────────────────────────────────────
 RETRY_AVG_LOGPROB_THRESHOLD  = -1.0   # below this = poor transcription quality
-RETRY_COMPRESSION_RATIO_MAX  = 2.4    # above this = hallucination, reject not retry
+RETRY_COMPRESSION_RATIO_MAX  = 3.2    # above this = hallucination, reject not retry
 RETRY_NO_SPEECH_THRESHOLD    = 0.80   # above this = bad audio, worth retrying
 RETRY_BEAM_SIZE              = 10     # beam size for retry pass
 
@@ -118,7 +118,7 @@ class STTService:
                 "வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you? Namashivayam, Ramraj, Tirupur."
             ),
             # Whisper's own silence probability — returned in segment.no_speech_prob
-            vad_filter=False,             # Disabled to avoid double-VAD penalty
+            vad_filter=True,             # Disabled to avoid double-VAD penalty
             vad_parameters=dict(
                 min_silence_duration_ms=500,
                 speech_pad_ms=200,

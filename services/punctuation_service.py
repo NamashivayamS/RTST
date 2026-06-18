@@ -62,7 +62,7 @@ class PunctuationService:
         # e.g. "I visited Chennai, Coimbatore, and Trichy"
         # Whisper got the commas right but dropped the final period.
         # Just append a period — no need to run the model.
-        return text + '.'   # skip model — 200ms saved
+        return text + '.'   # skip model — 200ms saved    
 
 
 if __name__ == "__main__":

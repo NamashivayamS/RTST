@@ -3,7 +3,7 @@ import torch
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-MODEL_SIZE = "medium"
+MODEL_SIZE = "large-v3-turbo"
 
 print(f"\nLoading Faster-Whisper Model ({MODEL_SIZE} on {DEVICE})...")
 

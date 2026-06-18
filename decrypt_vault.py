@@ -69,7 +69,7 @@ def decrypt_and_generate_dashboard():
             except Exception as e:
                 print(f" [FAIL] Could not decrypt {enc_path}: {e}")
 
-    # 3. Generate Beautiful HTML Dashboard
+    # 3. Generate HTML Dashboard
     html = """<!DOCTYPE html>
 <html>
 <head>

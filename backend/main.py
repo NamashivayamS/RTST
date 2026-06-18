@@ -1,54 +1,85 @@
+# backend/main.py
 """
-RealTimeSpeechTranslator — FastAPI Backend (Streaming Architecture)
-===================================================================
-Protocol unchanged. What changes internally:
-  - Frontend now sends 250ms chunks continuously (no silence detection)
-  - Backend maintains a per-connection ring buffer
-  - Silero VAD on backend fires pipeline when speech boundary detected
-  - asyncio.create_task() keeps receive loop running during pipeline execution
-  - No global processing_lock — per-connection is_processing flag instead
+RealTimeSpeechTranslator — FastAPI Backend (Production-Grade)
+=============================================================
+
+Changes from demo version → production version:
+  1. setup_logging() called first — all print() replaced with logger calls
+  2. init_pool() / close_pool() in startup/shutdown — connection pooling
+  3. start_report_writer() / stop_report_writer() — thread-safe JSONL writes
+  4. Token auth on /ws/translate — rejects unknown connections with WS 4003
+  5. meeting_id created at connect time (not lazily) — no race condition
+  6. MAX_PIPELINE_QUEUE from config.py — not a magic number in main.py
+  7. GC exceptions logged (not silently swallowed)
+  8. Encryption key loaded once at startup (not re-read per utterance)
+  9. _save() failures are logged at ERROR level with traceback
 """
+
+# ── FIRST: Load environment variables ──────────────────────────────────────────
+from dotenv import load_dotenv
+load_dotenv()
+
+# ── SECOND: configure logging before any other import that touches logging ──────
+from logger import setup_logging
+setup_logging(
+    log_level="INFO",          # set LOG_LEVEL=DEBUG env var to see all VAD/STT detail
+    log_file="logs/ispeak.log"
+)
 
 import asyncio
 import json
+import logging
+import os
 import queue
 import sys
-import os
+import time
 import traceback
 import uuid
-import time
+
+import numpy as np
 import scipy.io.wavfile
+import torch
 import nacl.public
 import nacl.utils
 
-import numpy as np
-import torch
-from silero_vad import load_silero_vad
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from datetime import datetime
+from silero_vad import load_silero_vad
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# ── Load config AFTER path setup ──────────────────────────────────────────────
 from config import (
     VAD_SILENCE_SEC, VAD_MIN_SPEECH_SEC,
     VAD_MAX_SPEECH_SEC, SAMPLE_RATE as CFG_SAMPLE_RATE,
     ENABLE_TTS, ENVIRONMENT_PRESETS,
     STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD,
-    DEFAULT_DEPARTMENT_ID
+    DEFAULT_DEPARTMENT_ID, SERVER_PUBLIC_KEY_PATH,
+    MAX_PIPELINE_QUEUE,                          # Fix 7: from config, not hardcoded
 )
 
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
+from database.connection import init_pool, close_pool   # Fix 1: pool lifecycle
 from database.queries import create_meeting, save_utterance
+from auth import validate_ws_token, reject_websocket    # Fix 4: auth
+from report_writer import (                             # Fix 6: thread-safe writer
+    start_report_writer, stop_report_writer, enqueue_report
+)
 
+logger = logging.getLogger("ispeak.ws")
+
+# ── App setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="RealTimeSpeechTranslator",
     description="Tamil ↔ English real-time speech translation API",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -58,12 +89,133 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from pydantic import BaseModel
-from datetime import datetime
+app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
 
-os.makedirs(os.path.join(PROJECT_ROOT, "temp_audio"), exist_ok=True)
+# ── Streaming constants ────────────────────────────────────────────────────────
+SAMPLE_RATE        = CFG_SAMPLE_RATE
+RING_BUFFER_SEC    = 30
+SILENCE_SAMPLES    = int(CFG_SAMPLE_RATE * VAD_SILENCE_SEC)
+MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
+MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
+
+manager = ConnectionManager()
+router: RouterService | None = None
+gpu_lock: asyncio.Lock | None = None
+
+# ── Fix 3: Encryption key loaded once at startup, not per-utterance ───────────
+_server_public_key: nacl.public.PublicKey | None = None
+
+os.makedirs(os.path.join(PROJECT_ROOT, "temp_audio"),   exist_ok=True)
 os.makedirs(os.path.join(PROJECT_ROOT, "secure_vault"), exist_ok=True)
 
+
+# ── Startup ────────────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    global router, gpu_lock, _server_public_key
+
+    if router is not None:
+        return
+
+    # Fix 6: thread-safe JSONL writer
+    start_report_writer(
+        path=os.path.join(PROJECT_ROOT, "feedback_reports.jsonl")
+    )
+
+    # Fix 1: initialise DB connection pool
+    init_pool(minconn=2, maxconn=20)
+
+    # Fix 3: load encryption key once
+    try:
+        with open(SERVER_PUBLIC_KEY_PATH, "rb") as kf:
+            _server_public_key = nacl.public.PublicKey(kf.read())
+        logger.info("[Startup] Encryption key loaded from %s", SERVER_PUBLIC_KEY_PATH)
+    except FileNotFoundError:
+        logger.warning(
+            "[Startup] server_public.key not found at %s — "
+            "audio encryption will be DISABLED. "
+            "Generate a key pair before deploying to production.",
+            SERVER_PUBLIC_KEY_PATH
+        )
+
+    # Fix 8: GC now runs inside the single startup handler
+    asyncio.create_task(garbage_collector_loop())
+
+    gpu_lock = asyncio.Lock()
+
+    logger.info("[Startup] Loading pipeline models...")
+    loop = asyncio.get_event_loop()
+    router = await loop.run_in_executor(None, RouterService)
+
+    logger.info("[Startup] Warming up translation models...")
+    await loop.run_in_executor(
+        None, lambda: router.translation_service.translate("Hello", "en", "tam_Taml")
+    )
+    await loop.run_in_executor(
+        None, lambda: router.translation_service.translate("வணக்கம்", "ta", "eng_Latn")
+    )
+
+    if ENABLE_TTS:
+        logger.info("[Startup] Warming up TTS...")
+        await loop.run_in_executor(
+            None, lambda: router.tts_service.generate_audio("வணக்கம்.")
+        )
+    else:
+        logger.info("[Startup] TTS warmup skipped (ENABLE_TTS=False).")
+
+    logger.info("[Startup] All models ready. Server accepting connections.")
+
+
+# ── Shutdown ───────────────────────────────────────────────────────────────────
+@app.on_event("shutdown")
+async def shutdown_event():
+    if router:
+        router.shutdown()
+    close_pool()            # Fix 1: drain pool cleanly
+    stop_report_writer()    # Fix 6: flush pending reports before exit
+    logger.info("[Shutdown] Clean shutdown complete.")
+
+
+# ── Garbage collector (Fix 8: exceptions now logged, not swallowed) ────────────
+gc_logger = logging.getLogger("ispeak.gc")
+
+async def garbage_collector_loop():
+    gc_logger.info("[GC] Garbage collector started (10-minute TTL on temp_audio).")
+    consecutive_failures = 0
+
+    while True:
+        await asyncio.sleep(60)
+        try:
+            temp_dir = os.path.join(PROJECT_ROOT, "temp_audio")
+            now      = time.time()
+            deleted  = 0
+            for filename in os.listdir(temp_dir):
+                if not filename.endswith(".enc"):
+                    continue
+                filepath = os.path.join(temp_dir, filename)
+                if os.path.getmtime(filepath) < now - 600:  # 10 minutes
+                    os.remove(filepath)
+                    deleted += 1
+
+            if deleted:
+                gc_logger.info("[GC] Deleted %d expired encrypted file(s).", deleted)
+
+            consecutive_failures = 0  # reset on success
+
+        except Exception:
+            consecutive_failures += 1
+            gc_logger.exception(
+                "[GC] Error during cleanup (failure #%d).", consecutive_failures
+            )
+            if consecutive_failures >= 5:
+                gc_logger.critical(
+                    "[GC] %d consecutive GC failures — "
+                    "temp_audio may be filling up. Check disk permissions.",
+                    consecutive_failures
+                )
+
+
+# ── Feedback report endpoint ───────────────────────────────────────────────────
 class FeedbackReport(BaseModel):
     utterance_id: str
     src_lang: str
@@ -73,62 +225,74 @@ class FeedbackReport(BaseModel):
     issue_type: str
     correction: str | None = None
 
+
 @app.post("/api/report")
 def report_mistake(report: FeedbackReport):
     report_data = {
         "timestamp": datetime.utcnow().isoformat(),
-        **report.dict()
+        **report.dict(),
     }
-    
-    # ── Move Encrypted Audio ──
+
+    # Move encrypted audio to vault
     temp_enc_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{report.utterance_id}.wav.enc")
-    vault_path = os.path.join(PROJECT_ROOT, "secure_vault", f"{report.utterance_id}.wav.enc")
-    
+    vault_path    = os.path.join(PROJECT_ROOT, "secure_vault", f"{report.utterance_id}.wav.enc")
+
     if os.path.exists(temp_enc_path):
         try:
             import shutil
             shutil.move(temp_enc_path, vault_path)
             report_data["audio_file"] = f"secure_vault/{report.utterance_id}.wav.enc"
-        except Exception as e:
-            print(f"[Telemetry] Move failed: {e}")
+            logging.getLogger("ispeak").info(
+                "[Report] Audio moved to vault for utterance %s", report.utterance_id
+            )
+        except Exception:
+            logging.getLogger("ispeak").exception(
+                "[Report] Failed to move audio for %s", report.utterance_id
+            )
     else:
-        print(f"[Telemetry] Warning: Audio for {report.utterance_id} expired or not found.")
+        logging.getLogger("ispeak").warning(
+            "[Report] Audio for %s not found in temp_audio "
+            "(expired or never saved).", report.utterance_id
+        )
 
-    with open(os.path.join(PROJECT_ROOT, "feedback_reports.jsonl"), "a", encoding="utf-8") as f:
-        f.write(json.dumps(report_data, ensure_ascii=False) + "\n")
+    # Fix 6: non-blocking, thread-safe enqueue instead of open(file, "a")
+    enqueue_report(report_data)
+
     return {"status": "success", "message": "Report logged"}
 
 
-async def garbage_collector_loop():
-    while True:
-        try:
-            temp_dir = os.path.join(PROJECT_ROOT, "temp_audio")
-            now = time.time()
-            for filename in os.listdir(temp_dir):
-                if not filename.endswith(".enc"): continue
-                filepath = os.path.join(temp_dir, filename)
-                if os.path.getmtime(filepath) < now - 600: # 10 minutes
-                    os.remove(filepath)
-                    print(f"[GC] Deleted expired encrypted chunk {filename}")
-        except Exception as e:
-            pass
-        await asyncio.sleep(60)
-
-app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
-
-manager = ConnectionManager()
-router: RouterService | None = None
-gpu_lock: asyncio.Lock | None = None
-
-# ── Streaming constants ────────────────────────────────────────────────────────
-RING_BUFFER_SEC    = 30                          # how much audio to keep
-SILENCE_SAMPLES    = int(CFG_SAMPLE_RATE * VAD_SILENCE_SEC)
-MIN_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MIN_SPEECH_SEC)
-MAX_SPEECH_SAMPLES = int(CFG_SAMPLE_RATE * VAD_MAX_SPEECH_SEC)
-MAX_PIPELINE_QUEUE = 2
+# ── REST endpoints ─────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {
+        "status": "ready" if router is not None else "loading",
+        "models": {
+            "whisper":     "loaded",
+            "translation": "loaded" if router else "pending",
+            "tts":         "enabled" if ENABLE_TTS else "disabled",
+        },
+        "active_connections": len(manager.active_connections),
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+    }
 
 
-def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int, threshold: float = 0.60) -> bool:
+@app.get("/", response_class=HTMLResponse)
+async def serve_frontend():
+    html_path = os.path.join(PROJECT_ROOT, "frontend", "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/status")
+async def pipeline_status():
+    return {
+        "pipeline_ready":    router is not None,
+        "active_connections": len(manager.active_connections),
+    }
+
+
+# ── VAD helper ─────────────────────────────────────────────────────────────────
+def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int, threshold: float) -> bool:
     WINDOW_SIZE = 512
     for i in range(0, len(audio) - WINDOW_SIZE + 1, WINDOW_SIZE):
         window = audio[i : i + WINDOW_SIZE]
@@ -137,46 +301,41 @@ def _vad_on_chunk(vad_model, audio: np.ndarray, sample_rate: int, threshold: flo
             return True
     return False
 
+
 # ── Per-connection state ───────────────────────────────────────────────────────
 class ConnectionState:
     def __init__(self):
-        self._maxlen    = CFG_SAMPLE_RATE * RING_BUFFER_SEC  # 480,000 samples
-        self._ring      = np.zeros(self._maxlen, dtype=np.float32)  # pre-allocated
-        self._write     = 0      # where to write next
-        self._total     = 0      # total samples ever received
+        self._maxlen    = SAMPLE_RATE * RING_BUFFER_SEC
+        self._ring      = np.zeros(self._maxlen, dtype=np.float32)
+        self._write     = 0
+        self._total     = 0
         self._utt_start = 0
-        self.active_tasks    = 0
+        self.active_tasks      = 0
         self.pending_utterance = None
-        self.was_speaking    = False
-        self.silence_samples = 0
-        self.target_lang = "ta"
-        self.meeting_id = None
-        self.translation_context = []  # Stores last 5 English source sentences for context injection
-        
+        self.was_speaking      = False
+        self.silence_samples   = 0
+        self.target_lang       = "ta"
+        self.meeting_id        = None   # set at connect time, not lazily
+
         self.vad_threshold         = VAD_THRESHOLD
-        self.silence_samples_limit = int(VAD_SILENCE_SEC * CFG_SAMPLE_RATE)
+        self.silence_samples_limit = int(VAD_SILENCE_SEC   * CFG_SAMPLE_RATE)
         self.min_speech_samples    = int(VAD_MIN_SPEECH_SEC * CFG_SAMPLE_RATE)
         self.max_speech_samples    = int(VAD_MAX_SPEECH_SEC * CFG_SAMPLE_RATE)
         self.no_speech_threshold   = STT_NO_SPEECH_THRESHOLD
         self.rms_gate              = 0.005
-        
-        # Load a separate lightweight Silero instance per connection
+
         self._vad_model = load_silero_vad()
         self._vad_model.reset_states()
 
     def push(self, chunk: np.ndarray):
         n   = len(chunk)
         end = self._write + n
-
         if end <= self._maxlen:
-            # Simple case — fits without wrapping
             self._ring[self._write:end] = chunk
         else:
-            # Wrap-around case — split across end and start of buffer
             first = self._maxlen - self._write
-            self._ring[self._write:] = chunk[:first]   # fill to end
-            self._ring[:n - first]   = chunk[first:]   # wrap to start
-        
+            self._ring[self._write:] = chunk[:first]
+            self._ring[:n - first]   = chunk[first:]
         self._write  = end % self._maxlen
         self._total += n
 
@@ -184,52 +343,29 @@ class ConnectionState:
         offset = min(self._total - self._utt_start, self._maxlen)
         end    = self._write
         start  = (end - offset) % self._maxlen
-
         if start < end:
-            return self._ring[start:end].copy()   # no wrap — simple slice
-        else:
-            return np.concatenate([              # wrap — two slices joined
-                self._ring[start:],
-                self._ring[:end]
-            ])
+            return self._ring[start:end].copy()
+        return np.concatenate([self._ring[start:], self._ring[:end]])
 
     def get_utterance_smart_split(self) -> np.ndarray:
-        """
-        Extracts the utterance but scans backwards up to 1.5 seconds 
-        to find a natural pause (lowest RMS) to avoid slicing a word in half.
-        Adjusts _utt_start so the remaining audio rolls over to the next utterance.
-        """
         utterance = self.get_utterance()
-        
-        # We only try to split if the utterance is reasonably long
-        if len(utterance) < 2 * CFG_SAMPLE_RATE:
+        if len(utterance) < 2 * SAMPLE_RATE:
             self.mark_utterance_start()
             return utterance
-            
-        # Scan the last 1.0 seconds in 50ms windows
-        scan_length = int(1.0 * CFG_SAMPLE_RATE)
-        window_size = int(0.05 * CFG_SAMPLE_RATE)
-        
-        start_scan = max(0, len(utterance) - scan_length)
-        
-        min_rms = float('inf')
-        best_split_idx = len(utterance)
-        
+        scan_length = int(1.0 * SAMPLE_RATE)
+        window_size = int(0.05 * SAMPLE_RATE)
+        start_scan  = max(0, len(utterance) - scan_length)
+        min_rms, best_split_idx = float("inf"), len(utterance)
         for i in range(start_scan, len(utterance) - window_size, window_size):
-            window = utterance[i:i+window_size]
-            rms = float(np.sqrt(np.mean(window**2)))
+            w   = utterance[i : i + window_size]
+            rms = float(np.sqrt(np.mean(w ** 2)))
             if rms < min_rms:
-                min_rms = rms
-                best_split_idx = i + window_size // 2
-                
-        # Only split if we found a valid pause that doesn't truncate too much
-        if best_split_idx > CFG_SAMPLE_RATE:
-            split_utt = utterance[:best_split_idx]
-            rollback_samples = len(utterance) - best_split_idx
-            self._utt_start = self._total - rollback_samples
-            print(f"[VAD] Force-fire: Rolled back {rollback_samples/CFG_SAMPLE_RATE:.2f}s to find clean word boundary.")
+                min_rms, best_split_idx = rms, i + window_size // 2
+        if best_split_idx > SAMPLE_RATE:
+            split_utt      = utterance[:best_split_idx]
+            rollback       = len(utterance) - best_split_idx
+            self._utt_start = self._total - rollback
             return split_utt
-            
         self.mark_utterance_start()
         return utterance
 
@@ -241,91 +377,33 @@ class ConnectionState:
         return self._total - self._utt_start
 
 
-# ── Startup ────────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup_event():
-    global router
-    global gpu_lock
-    if router is not None:
-        return
-    asyncio.create_task(garbage_collector_loop())
-    gpu_lock = asyncio.Lock()
-    print("[Backend] Loading pipeline models...")
-    loop = asyncio.get_event_loop()
-    router = await loop.run_in_executor(None, RouterService)
-
-    print("[Backend] Warming up models...")
-    await loop.run_in_executor(
-        None, lambda: router.translation_service.translate("Hello", "en", "tam_Taml")
-    )
-    await loop.run_in_executor(
-        None, lambda: router.translation_service.translate("வணக்கம்", "ta", "eng_Latn")
-    )
-    await loop.run_in_executor(
-        None, lambda: router.translation_service.translate("नमस्ते", "hi", "eng_Latn")
-    )
-    
-    if ENABLE_TTS:
-        print("[Backend] Warming up TTS...")
-        await loop.run_in_executor(
-            None, lambda: router.tts_service.generate_audio("வணக்கம்.")
-        )
-        print("[Backend] TTS warmed up.")
-    else:
-        print("[Backend] TTS warmup skipped (ENABLE_TTS=False).")
-
-    print("[Backend] All models warmed up. Server ready.")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    if router:
-        router.shutdown()
-
-
-# ── REST ───────────────────────────────────────────────────────────────────────
-@app.get("/health")
-async def health():
-    return {
-        "status": "ready" if router is not None else "loading",
-        "models": {
-            "whisper": "loaded",
-            "translation": "loaded" if router else "pending",
-            "tts": "enabled" if ENABLE_TTS else "disabled",
-        },
-        "active_connections": len(manager.active_connections),
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
-    }
-
-@app.get("/", response_class=HTMLResponse)
-async def serve_frontend():
-    # Serve the NeuralTongue UI when someone visits the URL (like via ngrok)
-    html_path = os.path.join(PROJECT_ROOT, "frontend", "index.html")
-    with open(html_path, "r", encoding="utf-8") as f:
-        return f.read()
-
-@app.get("/status")
-async def pipeline_status():
-    return {
-        "pipeline_ready": router is not None,
-        "active_connections": len(manager.active_connections),
-    }
-
-
-# ── WebSocket ──────────────────────────────────────────────────────────────────
+# ── WebSocket endpoint ─────────────────────────────────────────────────────────
 @app.websocket("/ws/translate")
 async def websocket_translate(websocket: WebSocket):
+    # ── Fix 4: authenticate before accepting ──────────────────────────────────
+    token = websocket.query_params.get("token")
+    if not validate_ws_token(token):
+        await reject_websocket(websocket, reason="Invalid or missing token")
+        return
+
     await manager.connect(websocket)
     state = ConnectionState()
     loop  = asyncio.get_event_loop()
 
-    state.meeting_id = await loop.run_in_executor(
-        None, lambda: create_meeting(
-            title="Live Translation Session",
-            department_id=DEFAULT_DEPARTMENT_ID
+    # ── Fix 5: create meeting at connect time (no race condition) ─────────────
+    try:
+        state.meeting_id = await loop.run_in_executor(
+            None,
+            lambda: create_meeting(
+                title="Live Translation Session",
+                department_id=DEFAULT_DEPARTMENT_ID,
+            )
         )
-    )
-    print(f"[MEETING] Created for WS: {state.meeting_id}")
+        logger.info("[WS] Meeting created for new connection: %s", state.meeting_id)
+    except Exception:
+        logger.exception("[WS] Failed to create meeting — DB may be down.")
+        # Allow connection to proceed; DB writes will fail silently per utterance
+        # rather than blocking the entire demo.
 
     try:
         while True:
@@ -339,48 +417,44 @@ async def websocket_translate(websocket: WebSocket):
                     ctrl = json.loads(message["text"])
                 except json.JSONDecodeError:
                     continue
+
                 if ctrl.get("action") == "ping":
                     await manager.send_json(websocket, {"type": "pong"})
+
                 elif ctrl.get("action") == "config":
-                    # Handle target language
                     if "target_lang" in ctrl:
-                        if state.target_lang != ctrl["target_lang"]:
-                            state.target_lang = ctrl["target_lang"]
-                            state.translation_context.clear()
-                            print(f"[Config] Target language changed to: {state.target_lang} (Context wiped)")
-                    # Handle environment preset
+                        state.target_lang = ctrl["target_lang"]
+                        logger.info("[Config] target_lang → %s", state.target_lang)
                     if "environment" in ctrl:
                         preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])
                         if preset:
-                            state.vad_threshold       = preset["vad_threshold"]
+                            state.vad_threshold         = preset["vad_threshold"]
                             state.silence_samples_limit = int(CFG_SAMPLE_RATE * preset["silence_sec"])
-                            state.min_speech_samples  = int(CFG_SAMPLE_RATE * preset["min_speech_sec"])
-                            state.no_speech_threshold = preset["no_speech_threshold"]
-                            state.rms_gate            = preset["rms_gate"]
-                            print(f"[Config] Environment set to: {ctrl['environment']}")
+                            state.min_speech_samples    = int(CFG_SAMPLE_RATE * preset["min_speech_sec"])
+                            state.no_speech_threshold   = preset["no_speech_threshold"]
+                            state.rms_gate              = preset["rms_gate"]
+                            logger.info("[Config] Environment → %s", ctrl["environment"])
                 continue
 
-            # ── 250ms audio chunk ──────────────────────────────────────────
             if "bytes" not in message or not message["bytes"]:
                 continue
 
             chunk = np.frombuffer(message["bytes"], dtype=np.float32)
             state.push(chunk)
 
-            # ── VAD: is there speech in this chunk? ────────────────────────
             try:
                 has_speech = await loop.run_in_executor(
                     None,
-                    lambda c=chunk: _vad_on_chunk(state._vad_model, c, CFG_SAMPLE_RATE, state.vad_threshold)
+                    lambda c=chunk: _vad_on_chunk(
+                        state._vad_model, c, SAMPLE_RATE, state.vad_threshold
+                    )
                 )
-            except Exception as e:
-                print(f"[VAD Error] {e}")   # temporary — remove after confirming fix
+            except Exception:
+                logger.exception("[VAD] Error on chunk — treating as silence.")
                 has_speech = False
 
             if has_speech:
                 if not state.was_speaking:
-                    # Always mark the start of new speech,
-                    # regardless of whether a pipeline is running
                     state.mark_utterance_start()
                     state.was_speaking = True
                 state.silence_samples = 0
@@ -388,7 +462,7 @@ async def websocket_translate(websocket: WebSocket):
                 if state.utterance_length >= state.max_speech_samples:
                     utterance = state.get_utterance_smart_split()
                     if state.active_tasks >= MAX_PIPELINE_QUEUE:
-                        print(f"[Pipeline] Replacing stale queued utterance with newer one")
+                        logger.debug("[Pipeline] Replacing stale pending utterance.")
                         state.pending_utterance = utterance
                     else:
                         state.active_tasks += 1
@@ -397,19 +471,16 @@ async def websocket_translate(websocket: WebSocket):
                         )
             else:
                 state.silence_samples += len(chunk)
-
                 if state.was_speaking and state.silence_samples >= state.silence_samples_limit:
-                    # Speech just ended — fire pipeline if not already running
                     state.was_speaking = False
-
                     if (
                         state.utterance_length >= state.min_speech_samples
                         and state.silence_samples >= state.silence_samples_limit
                     ):
                         utterance = state.get_utterance()
-                        state.mark_utterance_start()  # reset for next utterance
+                        state.mark_utterance_start()
                         if state.active_tasks >= MAX_PIPELINE_QUEUE:
-                            print(f"[Pipeline] Replacing stale queued utterance with newer one")
+                            logger.debug("[Pipeline] Replacing stale pending utterance.")
                             state.pending_utterance = utterance
                         else:
                             state.active_tasks += 1
@@ -419,91 +490,100 @@ async def websocket_translate(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        print(f"[WS] Unexpected error: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("[WS] Unexpected error in receive loop.")
     finally:
         manager.disconnect(websocket)
 
 
+# ── Pipeline task ──────────────────────────────────────────────────────────────
 async def _run_pipeline(
     websocket: WebSocket,
     audio: np.ndarray,
     state: ConnectionState,
     loop: asyncio.AbstractEventLoop,
 ):
-    """
-    Runs the full translation pipeline for one utterance.
-    Executes as a background task — the WebSocket receive loop
-    continues receiving new audio chunks while this runs.
-    """
-    try:
-        print(f"[Pipeline Task] Utterance duration: {len(audio)/CFG_SAMPLE_RATE:.2f}s")
-        
-        # ── Zero-Disk Encryption Buffer ──
-        utt_id = f"utt_{uuid.uuid4().hex[:8]}"
-        enc_temp_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{utt_id}.wav.enc")
-        
-        def _encrypt_and_save_audio():
-            import io
-            # 1. Write raw float32 audio to a RAM buffer
-            wav_io = io.BytesIO()
-            scipy.io.wavfile.write(wav_io, CFG_SAMPLE_RATE, audio)
-            raw_audio = wav_io.getvalue()
-            
-            # 2. Encrypt the bytes in RAM
-            with open(os.path.join(PROJECT_ROOT, "server_public.key"), "rb") as kf:
-                pub_key = nacl.public.PublicKey(kf.read())
-            box = nacl.public.SealedBox(pub_key)
-            encrypted_audio = box.encrypt(raw_audio)
-            
-            # 3. Save only the encrypted bytes to the hard drive
-            with open(enc_temp_path, "wb") as f:
-                f.write(encrypted_audio)
+    pl_logger = logging.getLogger("ispeak.pipeline")
+    pl_logger.info("[Pipeline] Utterance duration: %.2fs", len(audio) / SAMPLE_RATE)
 
-        # Run encryption in background thread so it doesn't block WebSockets
-        await loop.run_in_executor(None, _encrypt_and_save_audio)
-        
-        # Concurrency is now handled internally by RouterService (stt_lock & translation_lock)
+    try:
+        # ── Encrypt and save audio (Fix 3: uses pre-loaded key) ───────────────
+        utt_id        = f"utt_{uuid.uuid4().hex[:8]}"
+        enc_temp_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{utt_id}.wav.enc")
+
+        if _server_public_key is not None:
+            def _encrypt_and_save():
+                import io
+                wav_io = io.BytesIO()
+                scipy.io.wavfile.write(wav_io, SAMPLE_RATE, audio)
+                box            = nacl.public.SealedBox(_server_public_key)  # key already in RAM
+                encrypted_audio = box.encrypt(wav_io.getvalue())
+                with open(enc_temp_path, "wb") as f:
+                    f.write(encrypted_audio)
+
+            await loop.run_in_executor(None, _encrypt_and_save)
+        else:
+            pl_logger.debug(
+                "[Pipeline] Skipping audio encryption (no public key loaded)."
+            )
+
+        # ── Run translation pipeline ───────────────────────────────────────────
         result = await loop.run_in_executor(
-            None, lambda: router.process_audio(
-                audio, 
-                target_lang=state.target_lang, 
+            None,
+            lambda: router.process_audio(
+                audio,
+                target_lang=state.target_lang,
                 skip_vad=True,
                 no_speech_threshold=state.no_speech_threshold,
-                rms_gate=state.rms_gate
+                rms_gate=state.rms_gate,
             )
         )
+
         if not result.get("translated_text"):
             return
 
-        def _save():
-            try:
-                save_utterance(
-                    meeting_id=state.meeting_id,
-                    source_text=result.get("punctuated_text") or result.get("raw_text") or "",
-                    translated_text=result.get("translated_text", ""),
-                    source_language=result.get("src_lang", ""),
-                    target_language=result.get("tgt_lang", ""),
-                    total_latency_ms=int(result.get("total_time", 0) * 1000)
-                )
-            except Exception as e:
-                print(f"[DB Error] Failed to save utterance: {e}")
+        pl_logger.info(
+            "[Pipeline] %s → %s | '%s' → '%s' | %.0fms",
+            result.get("src_lang"), result.get("tgt_lang"),
+            result.get("raw_text", "")[:60],
+            result.get("translated_text", "")[:60],
+            result.get("total_time", 0) * 1000,
+        )
 
-        # Fire and forget in the background thread (no asyncio.create_task needed for Futures)
-        loop.run_in_executor(None, _save)
+        # ── Save to DB (Fix 9: failures are logged with traceback) ─────────────
+        if state.meeting_id:
+            def _save():
+                try:
+                    save_utterance(
+                        meeting_id=state.meeting_id,
+                        source_text=result.get("punctuated_text") or result.get("raw_text") or "",
+                        translated_text=result.get("translated_text", ""),
+                        source_language=result.get("src_lang", ""),
+                        target_language=result.get("tgt_lang", ""),
+                        total_latency_ms=int(result.get("total_time", 0) * 1000),
+                    )
+                except Exception:
+                    # ERROR level + exc_info=True → full traceback in log file
+                    logging.getLogger("ispeak.db").error(
+                        "[DB] save_utterance failed for meeting %s",
+                        state.meeting_id,
+                        exc_info=True,
+                    )
 
+            loop.run_in_executor(None, _save)
+
+        # ── Send subtitle ──────────────────────────────────────────────────────
         await manager.send_json(websocket, {
-            "type":     "subtitle",
+            "type":         "subtitle",
             "utterance_id": utt_id,
-            "text":     result["translated_text"],
-            "source_text": result.get("punctuated_text") or result.get("raw_text") or "",
-            "src_lang": result["src_lang"],
-            "tgt_lang": result["tgt_lang"],
-            "confidence": result.get("language_prob", None),
+            "text":         result["translated_text"],
+            "source_text":  result.get("punctuated_text") or result.get("raw_text") or "",
+            "src_lang":     result["src_lang"],
+            "tgt_lang":     result["tgt_lang"],
+            "confidence":   result.get("language_prob"),
         })
 
-        # TTS streaming (re-enable when ENABLE_TTS = True)
+        # ── Stream TTS audio chunks ────────────────────────────────────────────
         total_chunks = result["total_chunks"]
         chunks_sent  = 0
 
@@ -531,24 +611,25 @@ async def _run_pipeline(
             await manager.send_bytes(websocket, audio_bytes)
 
         await manager.send_json(websocket, {
-            "type": "done",
+            "type":         "done",
             "total_chunks": chunks_sent,
-            "latency_ms": round(result.get("total_time", 0) * 1000),
+            "latency_ms":   round(result.get("total_time", 0) * 1000),
         })
 
-    except Exception as e:
-        print(f"[Pipeline Task] Error: {e}")
-        traceback.print_exc()
+    except Exception:
+        pl_logger.exception("[Pipeline] Unhandled error in pipeline task.")
         try:
             await manager.send_json(websocket, {
-                "type": "error", "message": str(e)
+                "type": "error",
+                "message": "Internal pipeline error — see server logs."
             })
         except Exception:
             pass
+
     finally:
         state.active_tasks = max(0, state.active_tasks - 1)
         if state.pending_utterance is not None:
-            next_utt = state.pending_utterance
+            next_utt               = state.pending_utterance
             state.pending_utterance = None
-            state.active_tasks += 1
+            state.active_tasks     += 1
             asyncio.create_task(_run_pipeline(websocket, next_utt, state, loop))
