@@ -28,7 +28,7 @@ class CorrectionService:
                 corrected = apply_tanglish_corrections(corrected)
             return corrected
         if language == "en":
-            from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
+            from utils.corrections.correction_engine import apply_proper_nouns
             import re
             corrected = text.strip()
             # Regex Normalization for Ramraj variants in English (e.g. Ram raj, Raamraj -> Ramraj)
@@ -36,9 +36,7 @@ class CorrectionService:
             corrected = re.sub(r'(?<!\w)Ramraj\s*[Cc]ott?on(?!\w)', 'Ramraj Cotton', corrected)
             
             corrected = self._inject_missing_pronouns(corrected)
-            for wrong, right in PROPER_NOUN_CORRECTIONS.items():
-                pattern = r'(?<!\w)' + re.escape(wrong) + r'(?!\w)'
-                corrected = re.sub(pattern, right, corrected)
+            corrected = apply_proper_nouns(corrected)
             return corrected
         return text.strip()
 

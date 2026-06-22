@@ -126,10 +126,8 @@ class STTService:
             beam_size=self.beam_size,
             language=language,
             # Provide context to bias the model toward Tamil and English evenly.
-            # This helps language detection on very short sentences for both languages.
-            initial_prompt=(
-                "வணக்கம். Hello."
-            ),
+            # Removed initial_prompt="வணக்கம். Hello." as it causes prompt leakage
+            # hallucination in the medium model (e.g. "Hello. Hello. Hello.")
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # Disabled to avoid double-VAD penalty
             vad_parameters=dict(
@@ -141,6 +139,28 @@ class STTService:
         )
 
         segments = list(segments_gen)
+        detected_lang = info.language
+
+        # ── Dual-Model Routing ────────────────────────────────────────────────
+        # If the primary model detects Tamil, re-run with the specialized Tamil model.
+        if detected_lang == "ta" and self.tamil_model is not None:
+            print("[STT] Primary model detected Tamil. Re-routing through specialized Tamil model...")
+            segments_gen_ta, info_ta = self.tamil_model.transcribe(
+                audio_input,
+                beam_size=self.beam_size,
+                language="ta",
+                initial_prompt=None,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200,
+                ),
+                condition_on_previous_text=False,
+                temperature=0.0,
+            )
+            segments = list(segments_gen_ta)
+            info = info_ta
+            detected_lang = "ta"
 
         # ── Quality assessment ─────────────────────────────────────────────────
         quality = self._assess_segment_quality(segments)
@@ -208,6 +228,9 @@ class STTService:
 
         # ── Assemble full text ─────────────────────────────────────────────
         full_text = " ".join(seg.text.strip() for seg in segments).strip()
+
+        # Clean up any residual prompt leakage or common repetitive hallucinations
+        full_text = re.sub(r'(?i)^(?:hello[.,\s]*|வணக்கம்[.,\s]*)+', '', full_text).strip()
 
         # Repetition hallucination check
         words = full_text.split()

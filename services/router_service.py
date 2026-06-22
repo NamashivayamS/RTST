@@ -14,11 +14,7 @@ if PROJECT_ROOT not in sys.path:
 
 from config import ENABLE_TTS
 
-# ── IMPORTANT: Load CPU-bound services BEFORE any CUDA model ──────────────────
-# PunctuationModel silently crashes if Whisper has already claimed the CUDA
-# context on Windows. Maintain this import order strictly.
 from services.correction_service  import CorrectionService
-from services.punctuation_service import PunctuationService
 from services.refinement_service  import RefinementService
 
 # ── GPU models ────────────────────────────────────────────────────────────────
@@ -63,6 +59,10 @@ class RouterService:
         self.request_counter = itertools.count(1)
 
         # CPU-bound first — punctuation model must load before Whisper
+        # IMPORTANT: We import PunctuationService inside __init__ rather than globally.
+        # This prevents auto-formatters from alphabetically sorting the import below Whisper,
+        # which would cause a silent CUDA crash on Windows.
+        from services.punctuation_service import PunctuationService
         self.correction_service  = CorrectionService()
         self.punctuation_service = PunctuationService()
         self.refinement_service  = RefinementService()
@@ -221,6 +221,7 @@ class RouterService:
         skip_vad: bool = False,
         no_speech_threshold: float = None,
         rms_gate: float = 0.005,
+        cancel_event: threading.Event = None,
     ) -> dict:
         """
         Full pipeline: raw audio array (float32, 16kHz) → subtitles + TTS queue.
@@ -243,6 +244,10 @@ class RouterService:
         pipeline_start = time.perf_counter()
         _stt_lock_held = False
         _translation_lock_held = False
+
+        if cancel_event and cancel_event.is_set():
+            print(f"[REQUEST {request_id}] CANCELLED - Client disconnected")
+            return self._empty_result()
 
         try:
             if isinstance(audio_input, np.ndarray):
@@ -335,6 +340,10 @@ class RouterService:
             )        
 
             # ── 2. STT ───────────────────────────────────────────────────────────
+            if cancel_event and cancel_event.is_set():
+                print(f"[REQUEST {request_id}] CANCELLED BEFORE STT - Client disconnected")
+                return self._empty_result()
+                
             if not self.stt_lock.acquire(timeout=10.0):
                 print(f"[REQUEST {request_id}] SKIPPED - STT lock timeout")
                 return self._empty_result()
@@ -384,6 +393,10 @@ class RouterService:
                 print(f"[Pipeline] Punctuation skipped (Tamil input)")
 
             # ── 5. Translation ────────────────────────────────────────────────────
+            if cancel_event and cancel_event.is_set():
+                print(f"[REQUEST {request_id}] CANCELLED BEFORE TRANSLATION - Client disconnected")
+                return self._empty_result()
+                
             if not self.translation_lock.acquire(timeout=10.0):
                 print(f"[REQUEST {request_id}] SKIPPED - Translation lock timeout")
                 return self._empty_result()

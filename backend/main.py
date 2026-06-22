@@ -41,6 +41,7 @@ import os
 import queue
 import sys
 import time
+import threading
 import traceback
 import uuid
 
@@ -324,6 +325,7 @@ class ConnectionState:
         self.silence_samples   = 0
         self.target_lang       = "ta"
         self.meeting_id        = None   # set at connect time, not lazily
+        self.cancel_event      = threading.Event()
 
         self.vad_threshold         = VAD_THRESHOLD
         self.silence_samples_limit = int(VAD_SILENCE_SEC   * CFG_SAMPLE_RATE)
@@ -501,6 +503,7 @@ async def websocket_translate(websocket: WebSocket):
     except Exception:
         logger.exception("[WS] Unexpected error in receive loop.")
     finally:
+        state.cancel_event.set()
         manager.disconnect(websocket)
 
 
@@ -544,6 +547,7 @@ async def _run_pipeline(
                 skip_vad=True,
                 no_speech_threshold=state.no_speech_threshold,
                 rms_gate=state.rms_gate,
+                cancel_event=state.cancel_event,
             )
         )
 
