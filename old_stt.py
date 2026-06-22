@@ -128,7 +128,7 @@ class STTService:
             # Provide context to bias the model toward Tamil and English evenly.
             # This helps language detection on very short sentences for both languages.
             initial_prompt=(
-                "வணக்கம். Hello."
+                "வணக்கம். நீங்கள் எப்படி இருக்கிறீர்கள்? Hello, how are you? Namashivayam, Ramraj, Tirupur."
             ),
             # Whisper's own silence probability — returned in segment.no_speech_prob
             vad_filter=True,             # Disabled to avoid double-VAD penalty

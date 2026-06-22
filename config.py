@@ -25,15 +25,15 @@ import os
 
 # ── Streaming / VAD thresholds ────────────────────────────────────────────────
 SAMPLE_RATE          = 16000
-VAD_SILENCE_SEC      = 0.3    # seconds of silence before utterance fires
-VAD_MIN_SPEECH_SEC   = 0.35   # minimum utterance length to process
+VAD_SILENCE_SEC      = 0.6    # seconds of silence before utterance fires (increased to prevent chopping Tamil words)
+VAD_MIN_SPEECH_SEC   = 0.5    # minimum utterance length to process
 VAD_MAX_SPEECH_SEC   = 7.0    # force-fire after this many seconds of continuous speech
 VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95
 STT_LANG_CONFIDENCE_FLOOR  = 0.70
-STT_BEAM_SIZE              = 2
+STT_BEAM_SIZE              = 5
 
 # ── Pipeline flags ────────────────────────────────────────────────────────────
 ENABLE_TTS = False

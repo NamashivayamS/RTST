@@ -276,6 +276,13 @@ class TranslationService:
             # If an Indic language is spoken, always translate TO English
             tgt_lang = "eng_Latn"
             
+        if src_lang == tgt_lang:
+            return {
+                "translated_text": text,
+                "src_lang": src_lang,
+                "tgt_lang": tgt_lang,
+            }
+            
         translated = self.translate(text, src_lang, tgt_lang)
         return {
             "translated_text": translated,

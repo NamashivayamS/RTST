@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.corrections.correction_engine import apply_corrections
+from utils.corrections.correction_engine import apply_tamil_corrections, apply_tanglish_corrections
 from utils.corrections.tamil_corrections import TAMIL_CORRECTIONS
 from utils.corrections.tanglish_corrections import TANGLISH_CORRECTIONS
 
@@ -18,11 +18,15 @@ class CorrectionService:
     def __init__(self):
         print("CorrectionService initialized and ready.")
 
-    def correct(self, text: str, language: str = "ta") -> str:
+    def correct(self, text: str, language: str = "ta", is_tanglish: bool = False) -> str:
         if not text.strip():
             return text
+            
         if language == "ta":
-            return apply_corrections(text)
+            corrected = apply_tamil_corrections(text)
+            if is_tanglish:
+                corrected = apply_tanglish_corrections(corrected)
+            return corrected
         if language == "en":
             from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
             import re

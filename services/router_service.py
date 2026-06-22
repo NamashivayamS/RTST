@@ -370,7 +370,7 @@ class RouterService:
             # For Tanglish: apply both Tamil corrections AND Tanglish transliterations.
             # For pure Tamil: apply only Tamil corrections.
             # For English: pass through unchanged (no Tamil-script substitutions).
-            cleaned_text = self.correction_service.correct(raw_text, language=src_lang)
+            cleaned_text = self.correction_service.correct(raw_text, language=src_lang, is_tanglish=is_tanglish)
             print(f"[Pipeline] Corrected : {cleaned_text}")
 
             # ── 4. Punctuation (English only) ─────────────────────────────────────
