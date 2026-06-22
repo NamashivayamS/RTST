@@ -19,6 +19,14 @@ Changes from demo version → production version:
 from dotenv import load_dotenv
 load_dotenv()
 
+import sys
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass  # Python version doesn't support reconfigure (very old versions)
+
 # ── SECOND: configure logging before any other import that touches logging ──────
 from logger import setup_logging
 setup_logging(

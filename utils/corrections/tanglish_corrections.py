@@ -7,6 +7,18 @@ TANGLISH_CORRECTIONS = {
     "ராமராஜ்": "Ramraj",
     "காட்டணன்": "Cotton",
     "வேட்டி": "Dhoti",
+    "சட்டு": "Shirt",
+    "சட்ட": "Shirt",
+    
+    # --- NEW from Ramraj Cotton interview ---
+    "வேட்டித்": "Dhoti",
+    "வேஷ்டி": "Dhoti",
+    "வேஷ்டிகள்": "Dhotis",
+    "வேட்டிகள்": "Dhotis",
+    "காட்டன்": "Cotton",
+    "காத்தின்": "Cotton",
+    "திருப்புர்ல": "Tiruppur",
+    
     "எட்டாட்டு": "Eight Eight",
     "கடத்தை": "Shop",
     "கடை": "Shop",

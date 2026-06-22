@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import re
 import numpy as np
-from models.whisper_model import whisper_model
+from models.whisper_model import whisper_model, tamil_whisper_model
 
 
 # Maps Whisper ISO 639-1 codes → IndicTrans2 language tokens
@@ -58,14 +58,22 @@ from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, STT_BEAM_
 
 class STTService:
     """
-    Speech-to-Text service using Faster-Whisper (medium model).
+    Speech-to-Text service using Faster-Whisper with dual-model routing.
 
-    Key improvements over the basic wrapper:
+    Architecture:
+    - Primary model: large-v3-turbo (English + language detection + multilingual fallback)
+    - Tamil model: vasista22/whisper-tamil-medium (specialized Tamil fine-tune)
+
+    Flow:
+    1. Primary model transcribes the audio chunk (fast, good at English)
+    2. If Tamil is detected, re-transcribe with the Tamil-specific model
+    3. If Tamil model is unavailable, use primary model's output as fallback
+
+    Key features:
     - no_speech_prob threshold: rejects frames Whisper itself is uncertain about
     - Hallucination filter: catches common Tamil silence-hallucinations
     - Tamil/Malayalam reclassification: fixes Whisper's most common dialect error
     - Tanglish detection: flags code-switched input for special handling downstream
-    - beam_size=5 for accuracy (can be reduced to 1 for speed if needed)
     """
 
     # Reject frames where Whisper's own silence probability exceeds this.
@@ -80,9 +88,14 @@ class STTService:
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
 
     def __init__(self, beam_size: int = STT_BEAM_SIZE):
-        self.model     = whisper_model
-        self.beam_size = beam_size
-        print("STTService initialized and ready.")
+        self.model       = whisper_model
+        self.tamil_model = tamil_whisper_model  # None if not available
+        self.beam_size   = beam_size
+
+        if self.tamil_model is not None:
+            print("STTService initialized with DUAL-MODEL routing (Turbo + Tamil).")
+        else:
+            print("STTService initialized (single model — Tamil model not loaded).")
 
     # ──────────────────────────────────────────────────────────────────────
     # Public API
@@ -261,6 +274,7 @@ class STTService:
                 # High confidence wrong language — just fall back silently
                 print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
                 detected_lang = "en"
+
 
         # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False

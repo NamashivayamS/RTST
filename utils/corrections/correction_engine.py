@@ -14,6 +14,11 @@ def apply_corrections(text: str) -> str:
     # Remove unwanted spaces/newlines
     text = text.strip()
 
+    # 1. Regex Normalization Pass for Ramraj in Tamil (e.g. ராம்ராஜ், ராமராஜின், ராம்ராஜுக்கு -> ராமராஜ்)
+    text = re.sub(r'(?<!\w)ராம்?ராஜ\w*(?!\w)', 'ராமராஜ்', text)
+    # Standardize Ramraj Cotton in Tamil
+    text = re.sub(r'(?<!\w)ராமராஜ்\s*காட்ட\w*(?!\w)', 'ராமராஜ் காட்டன்', text)
+
     for wrong, correct in ALL_CORRECTIONS.items():
         # Word boundary match — won't corrupt substrings
         # We check both English word boundaries (\b) and general word boundaries for Tamil

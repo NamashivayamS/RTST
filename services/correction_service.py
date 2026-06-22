@@ -27,6 +27,10 @@ class CorrectionService:
             from utils.corrections.proper_noun_corrections import PROPER_NOUN_CORRECTIONS
             import re
             corrected = text.strip()
+            # Regex Normalization for Ramraj variants in English (e.g. Ram raj, Raamraj -> Ramraj)
+            corrected = re.sub(r'(?<!\w)[Rr]a+m\s*[Rr]a+j\w*(?!\w)', 'Ramraj', corrected)
+            corrected = re.sub(r'(?<!\w)Ramraj\s*[Cc]ott?on(?!\w)', 'Ramraj Cotton', corrected)
+            
             corrected = self._inject_missing_pronouns(corrected)
             for wrong, right in PROPER_NOUN_CORRECTIONS.items():
                 pattern = r'(?<!\w)' + re.escape(wrong) + r'(?!\w)'
@@ -198,6 +202,13 @@ class CorrectionService:
 # Self-test  →  python correction_service.py
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import sys
+    if sys.platform.startswith("win"):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except AttributeError:
+            pass
 
     tests = [
         # Rule 1 — original conjunctions
