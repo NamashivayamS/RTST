@@ -206,6 +206,7 @@ function sendConfig() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({
         action: 'config',
+        source_lang: sourceLangSelect.value,
         target_lang: targetLangSelect.value,
         environment: envSelect.value
     }));

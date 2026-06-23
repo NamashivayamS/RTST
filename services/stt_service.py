@@ -105,7 +105,9 @@ class STTService:
         self,
         audio_input,            # str path or 1-D float32 numpy array at 16kHz
         language: str | None = None,
-        no_speech_threshold: float | None = None
+        no_speech_threshold: float | None = None,
+        force_language: str = "",
+        initial_prompt: str | None = None
     ) -> dict:
         """
         Transcribes audio and returns a rich result dict.
@@ -121,36 +123,14 @@ class STTService:
                 "segments":        list,
             }
         """
-        segments_gen, info = self.model.transcribe(
-            audio_input,
-            beam_size=self.beam_size,
-            language=language,
-            # Provide context to bias the model toward Tamil and English evenly.
-            # Removed initial_prompt="வணக்கம். Hello." as it causes prompt leakage
-            # hallucination in the medium model (e.g. "Hello. Hello. Hello.")
-            # Whisper's own silence probability — returned in segment.no_speech_prob
-            vad_filter=True,             # Disabled to avoid double-VAD penalty
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=200,
-                min_speech_duration_ms=200,
-            ),
-            condition_on_previous_text=False,  # prevents context bleed between chunks
-            temperature=0.0,                   # force greedy decoding to prevent 15-20s latency spikes
-        )
-
-        segments = list(segments_gen)
-        detected_lang = info.language
-
-        # ── Dual-Model Routing ────────────────────────────────────────────────
-        # If the primary model detects Tamil, re-run with the specialized Tamil model.
-        if detected_lang == "ta" and self.tamil_model is not None:
-            print("[STT] Primary model detected Tamil. Re-routing through specialized Tamil model...")
-            segments_gen_ta, info_ta = self.tamil_model.transcribe(
+        # ── Tamil-First Bypass (Priority 2) ──
+        if force_language == "ta" and self.tamil_model is not None:
+            print("[STT] Tamil-First Mode active: Bypassing primary model directly to Tamil model.")
+            segments_gen, info = self.tamil_model.transcribe(
                 audio_input,
                 beam_size=self.beam_size,
                 language="ta",
-                initial_prompt=None,
+                initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
@@ -160,9 +140,48 @@ class STTService:
                 condition_on_previous_text=False,
                 temperature=0.0,
             )
-            segments = list(segments_gen_ta)
-            info = info_ta
+            segments = list(segments_gen)
             detected_lang = "ta"
+        else:
+            segments_gen, info = self.model.transcribe(
+                audio_input,
+                beam_size=self.beam_size,
+                language=language,
+                initial_prompt=initial_prompt,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200,
+                    min_speech_duration_ms=200,
+                ),
+                condition_on_previous_text=False,
+                temperature=0.0,
+            )
+
+            segments = list(segments_gen)
+            detected_lang = info.language
+
+            # ── Dual-Model Routing ────────────────────────────────────────────────
+            # If the primary model detects Tamil, re-run with the specialized Tamil model.
+            if detected_lang == "ta" and self.tamil_model is not None:
+                print("[STT] Primary model detected Tamil. Re-routing through specialized Tamil model...")
+                segments_gen_ta, info_ta = self.tamil_model.transcribe(
+                    audio_input,
+                    beam_size=self.beam_size,
+                    language="ta",
+                    initial_prompt=initial_prompt,
+                    vad_filter=True,
+                    vad_parameters=dict(
+                        min_silence_duration_ms=500,
+                        speech_pad_ms=200,
+                        min_speech_duration_ms=200,
+                    ),
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                )
+                segments = list(segments_gen_ta)
+                info = info_ta
+                detected_lang = "ta"
 
         # ── Quality assessment ─────────────────────────────────────────────────
         quality = self._assess_segment_quality(segments)
@@ -185,7 +204,7 @@ class STTService:
                 audio_input,
                 beam_size=RETRY_BEAM_SIZE,
                 language=retry_lang_arg,
-                initial_prompt=None,
+                initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_silence_duration_ms=500,

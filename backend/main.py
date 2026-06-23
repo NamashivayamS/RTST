@@ -324,6 +324,8 @@ class ConnectionState:
         self.was_speaking      = False
         self.silence_samples   = 0
         self.target_lang       = "ta"
+        self.source_lang       = ""
+        self.stt_context       = ""
         self.meeting_id        = None   # set at connect time, not lazily
         self.cancel_event      = threading.Event()
 
@@ -435,6 +437,9 @@ async def websocket_translate(websocket: WebSocket):
                     if "target_lang" in ctrl:
                         state.target_lang = ctrl["target_lang"]
                         logger.info("[Config] target_lang → %s", state.target_lang)
+                    if "source_lang" in ctrl:
+                        state.source_lang = ctrl["source_lang"]
+                        logger.info("[Config] source_lang → %s", state.source_lang)
                     if "environment" in ctrl:
                         preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])
                         if preset:
@@ -543,7 +548,9 @@ async def _run_pipeline(
             None,
             lambda: router.process_audio(
                 audio,
+                source_lang=state.source_lang,
                 target_lang=state.target_lang,
+                stt_context=state.stt_context,
                 skip_vad=True,
                 no_speech_threshold=state.no_speech_threshold,
                 rms_gate=state.rms_gate,
@@ -561,6 +568,11 @@ async def _run_pipeline(
             result.get("translated_text", "")[:60],
             result.get("total_time", 0) * 1000,
         )
+
+        # ── Update Context (Last ~5 words) ──
+        words = result.get("raw_text", "").split()
+        if words:
+            state.stt_context = " ".join(words[-5:])
 
         # ── Save to DB (Fix 9: failures are logged with traceback) ─────────────
         if state.meeting_id:

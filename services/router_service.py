@@ -216,7 +216,9 @@ class RouterService:
     def process_audio(
         self,
         audio_input,
+        source_lang: str = "",
         target_lang: str = "ta",
+        stt_context: str = "",
         language: str | None = None,
         skip_vad: bool = False,
         no_speech_threshold: float = None,
@@ -356,7 +358,9 @@ class RouterService:
             stt_result = self.stt_service.transcribe(
                 audio_input, 
                 language=language, 
-                no_speech_threshold=no_speech_threshold
+                no_speech_threshold=no_speech_threshold,
+                force_language=source_lang,
+                initial_prompt=stt_context if stt_context else None
             )
             stt_time = time.perf_counter() - stt_start
             self.stt_lock.release()   # Release STT lock early for the next request
