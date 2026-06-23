@@ -32,6 +32,9 @@ const wsStatusText    = document.getElementById('wsStatusText');
 const dbStatusEl      = document.getElementById('dbStatus');
 const dbStatusText    = document.getElementById('dbStatusText');
 
+const dashWsDot       = document.getElementById('dashWsDot');
+const dashWsText      = document.getElementById('dashWsText');
+
 const sourceLangSelect = document.getElementById('sourceLang');
 const targetLangSelect = document.getElementById('targetLang');
 const envSelect       = document.getElementById('envSelect');
@@ -180,6 +183,11 @@ function connectWebSocket() {
     ws.onopen = () => {
         wsStatusDot.className = 'indicator-dot online';
         wsStatusText.innerText = 'Connected';
+        if (dashWsDot) {
+            dashWsDot.className = 'indicator-dot online';
+            dashWsDot.style.boxShadow = '0 0 8px rgba(34, 197, 94, 0.6)';
+        }
+        if (dashWsText) dashWsText.innerText = 'Connected';
         dbStatusText.innerText = 'Ready to sync';
         dbStatusEl.className = 'db-status';
         sendConfig();
@@ -197,6 +205,11 @@ function connectWebSocket() {
     ws.onclose = () => {
         wsStatusDot.className = 'indicator-dot offline';
         wsStatusText.innerText = 'Disconnected';
+        if (dashWsDot) {
+            dashWsDot.className = 'indicator-dot offline';
+            dashWsDot.style.boxShadow = '0 0 8px rgba(239, 68, 68, 0.6)';
+        }
+        if (dashWsText) dashWsText.innerText = 'Disconnected';
         if (isRecording) stopRecording();
     };
     ws.onerror = (e) => console.error('[WS Error]', e);

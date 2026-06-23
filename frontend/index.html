@@ -66,6 +66,10 @@
                     </div>
                 </div>
                 <div class="header-right">
+                    <div class="connection-ping" style="display: flex; align-items: center; gap: 8px; margin-right: 16px;">
+                        <div class="indicator-dot offline" id="dashWsDot" style="box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);"></div>
+                        <span id="dashWsText" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;">Disconnected</span>
+                    </div>
                     <div class="secure-badge">
                         <i class="fa-solid fa-shield-halved"></i>
                         <div>
@@ -76,8 +80,6 @@
                     <button id="toggleRightBtn" class="btn-icon"
                         style="margin-left: 8px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;"><i
                             class="fa-solid fa-chart-simple"></i></button>
-                    <button class="btn-danger" id="endMeetingBtn"><i class="fa-solid fa-phone-slash"></i> End
-                        Meeting</button>
                 </div>
             </header>
 
@@ -211,7 +213,7 @@
             </div>
         </aside>
     </div>
-    <script src="/static/app.js?v=11"></script>
+    <script src="/static/app.js?v=12"></script>
 </body>
 
 </html>
