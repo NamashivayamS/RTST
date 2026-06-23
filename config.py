@@ -25,15 +25,15 @@ import os
 
 # ── Streaming / VAD thresholds ────────────────────────────────────────────────
 SAMPLE_RATE          = 16000
-VAD_SILENCE_SEC      = 0.6    # seconds of silence before utterance fires (increased to prevent chopping Tamil words)
+VAD_SILENCE_SEC      = 0.9    # seconds of silence before utterance fires (increased to prevent chopping Tamil words)
 VAD_MIN_SPEECH_SEC   = 0.5    # minimum utterance length to process
-VAD_MAX_SPEECH_SEC   = 7.0    # force-fire after this many seconds of continuous speech
+VAD_MAX_SPEECH_SEC   = 7.0   # force-fire after this many seconds of continuous speech
 VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95
 STT_LANG_CONFIDENCE_FLOOR  = 0.70
-STT_BEAM_SIZE              = 5
+STT_BEAM_SIZE              = 2
 
 # ── Pipeline flags ────────────────────────────────────────────────────────────
 ENABLE_TTS = False
@@ -48,22 +48,22 @@ MAX_PIPELINE_QUEUE = 2
 ENVIRONMENT_PRESETS = {
     "quiet": {
         "vad_threshold":       0.60,
-        "silence_sec":         0.4,
-        "min_speech_sec":      0.35,
+        "silence_sec":         0.8,
+        "min_speech_sec":      0.50,
         "no_speech_threshold": 0.95,
         "rms_gate":            0.005,
     },
     "conference": {
         "vad_threshold":       0.70,
-        "silence_sec":         0.6,
+        "silence_sec":         0.9,
         "min_speech_sec":      0.50,
         "no_speech_threshold": 0.85,
         "rms_gate":            0.010,
     },
     "noisy": {
         "vad_threshold":       0.80,
-        "silence_sec":         0.8,
-        "min_speech_sec":      0.60,
+        "silence_sec":         1.0,
+        "min_speech_sec":      0.80,
         "no_speech_threshold": 0.75,
         "rms_gate":            0.015,
     },

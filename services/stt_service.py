@@ -133,6 +133,7 @@ class STTService:
             vad_parameters=dict(
                 min_silence_duration_ms=500,
                 speech_pad_ms=200,
+                min_speech_duration_ms=200,
             ),
             condition_on_previous_text=False,  # prevents context bleed between chunks
             temperature=0.0,                   # force greedy decoding to prevent 15-20s latency spikes
@@ -154,6 +155,7 @@ class STTService:
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
                     speech_pad_ms=200,
+                    min_speech_duration_ms=200,
                 ),
                 condition_on_previous_text=False,
                 temperature=0.0,
@@ -175,15 +177,20 @@ class STTService:
                 f"[STT] Running retry pass "
                 f"(beam_size={RETRY_BEAM_SIZE}, temperature=0.2)"
             )
-            retry_gen, retry_info = self.model.transcribe(
+            
+            retry_model = self.tamil_model if (detected_lang == "ta" and self.tamil_model is not None) else self.model
+            retry_lang_arg = "ta" if retry_model == self.tamil_model else language
+            
+            retry_gen, retry_info = retry_model.transcribe(
                 audio_input,
                 beam_size=RETRY_BEAM_SIZE,
-                language=language,
+                language=retry_lang_arg,
                 initial_prompt=None,
                 vad_filter=True,
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
                     speech_pad_ms=200,
+                    min_speech_duration_ms=200,
                 ),
                 condition_on_previous_text=False,
                 temperature=0.2,   # add slight randomness to escape local optima

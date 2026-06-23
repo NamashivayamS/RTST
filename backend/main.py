@@ -582,7 +582,7 @@ async def _run_pipeline(
                         exc_info=True,
                     )
 
-            loop.run_in_executor(None, _save)
+            await loop.run_in_executor(None, _save)
 
         # ── Send subtitle ──────────────────────────────────────────────────────
         await manager.send_json(websocket, {

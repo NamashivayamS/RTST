@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,6 +9,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
+
 <body class="dark-theme">
     <div class="app-container hide-left hide-right">
         <!-- LEFT SIDEBAR -->
@@ -19,18 +21,18 @@
                     <p>Real-Time Neural Translation</p>
                 </div>
             </div>
-            
+
             <button class="btn-primary w-full new-meeting-btn" onclick="location.reload()">
                 <i class="fa-solid fa-plus"></i> New Meeting
             </button>
-            
+
             <nav class="main-nav">
                 <a href="#" class="active"><i class="fa-solid fa-wave-square"></i> Live Meeting</a>
                 <a href="#"><i class="fa-solid fa-clock-rotate-left"></i> History</a>
                 <a href="#"><i class="fa-solid fa-chart-line"></i> Analytics</a>
                 <a href="#"><i class="fa-solid fa-gear"></i> Settings</a>
             </nav>
-            
+
             <div class="recent-meetings">
                 <h3>RECENT MEETINGS</h3>
                 <div class="meeting-list">
@@ -50,13 +52,17 @@
             <!-- TOP HEADER -->
             <header class="top-header">
                 <div class="header-left">
-                    <button id="toggleLeftBtn" class="btn-icon" style="margin-right: 12px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;"><i class="fa-solid fa-bars"></i></button>
+                    <button id="toggleLeftBtn" class="btn-icon"
+                        style="margin-right: 12px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;"><i
+                            class="fa-solid fa-bars"></i></button>
                     <div class="avatar-group">
                         <div class="avatar"><i class="fa-solid fa-user"></i></div>
                     </div>
                     <div class="meeting-meta">
-                        <h2>Product Strategy Meeting <span class="badge-live sm">LIVE</span> <span id="timer">00:00:00</span></h2>
-                        <p>1 Speaker | <span id="hdrSourceLang">English</span> <i class="fa-solid fa-arrow-right"></i> <span id="hdrTargetLang">Tamil</span></p>
+                        <h2>Product Strategy Meeting <span class="badge-live sm">LIVE</span> <span
+                                id="timer">00:00:00</span></h2>
+                        <p>1 Speaker | <span id="hdrSourceLang">English</span> <i class="fa-solid fa-arrow-right"></i>
+                            <span id="hdrTargetLang">Tamil</span></p>
                     </div>
                 </div>
                 <div class="header-right">
@@ -67,8 +73,11 @@
                             <span>Audio not stored</span>
                         </div>
                     </div>
-                    <button id="toggleRightBtn" class="btn-icon" style="margin-left: 8px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;"><i class="fa-solid fa-chart-simple"></i></button>
-                    <button class="btn-danger" id="endMeetingBtn"><i class="fa-solid fa-phone-slash"></i> End Meeting</button>
+                    <button id="toggleRightBtn" class="btn-icon"
+                        style="margin-left: 8px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 18px;"><i
+                            class="fa-solid fa-chart-simple"></i></button>
+                    <button class="btn-danger" id="endMeetingBtn"><i class="fa-solid fa-phone-slash"></i> End
+                        Meeting</button>
                 </div>
             </header>
 
@@ -86,8 +95,10 @@
                     <span>Auto Scroll</span>
                 </div>
                 <div class="view-toggles">
-                    <button id="viewSingleBtn" class="btn-icon active" title="Single Column View"><i class="fa-solid fa-align-left"></i></button>
-                    <button id="viewSplitBtn" class="btn-icon" title="Split View"><i class="fa-solid fa-columns"></i></button>
+                    <button id="viewSingleBtn" class="btn-icon active" title="Single Column View"><i
+                            class="fa-solid fa-align-left"></i></button>
+                    <button id="viewSplitBtn" class="btn-icon" title="Split View"><i
+                            class="fa-solid fa-columns"></i></button>
                 </div>
             </div>
 
@@ -139,7 +150,7 @@
                         </select>
                         <span>Target Language</span>
                     </div>
-                    
+
                     <div class="env-selector" style="margin-left: 15px;">
                         <select id="envSelect">
                             <option value="quiet">Quiet</option>
@@ -188,7 +199,7 @@
                     </button>
                 </div>
             </div>
-            
+
             <div class="panel connection-status">
                 <div class="status-indicator">
                     <div class="indicator-dot offline" id="wsStatusDot"></div>
@@ -202,4 +213,5 @@
     </div>
     <script src="/static/app.js?v=11"></script>
 </body>
+
 </html>

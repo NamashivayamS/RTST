@@ -14,14 +14,14 @@ try:
     whisper_model = WhisperModel(
         PRIMARY_MODEL,
         device=DEVICE,
-        compute_type="int8"
+        compute_type="int8_float16" if DEVICE == "cuda" else "int8"
     )
 except Exception as e:
     print(f"Error loading primary model: {e}. Downloading '{PRIMARY_MODEL}'...")
     whisper_model = WhisperModel(
         PRIMARY_MODEL,
         device=DEVICE,
-        compute_type="int8",
+        compute_type="int8_float16" if DEVICE == "cuda" else "int8",
         local_files_only=False
     )
 
@@ -33,7 +33,7 @@ try:
         tamil_whisper_model = WhisperModel(
             TAMIL_MODEL_PATH,
             device=DEVICE,
-            compute_type="int8"
+            compute_type="int8_float16" if DEVICE == "cuda" else "int8"
         )
         print("Tamil Model Loaded Successfully!")
     else:

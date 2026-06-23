@@ -36,6 +36,10 @@ LANG_CODE_MAP = {
 DEFAULT_TARGET_MAP = {
     "eng_Latn": "tam_Taml",
     "tam_Taml": "eng_Latn",
+    "hin_Deva": "eng_Latn",
+    "tel_Telu": "eng_Latn",
+    "kan_Knda": "eng_Latn",
+    "mal_Mlym": "eng_Latn",
 }
 
 def _sanitize_translation(text: str) -> str:
