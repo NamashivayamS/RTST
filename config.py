@@ -33,7 +33,8 @@ VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95
 STT_LANG_CONFIDENCE_FLOOR  = 0.70
-STT_BEAM_SIZE              = 2
+STT_BEAM_SIZE              = 2   # primary model (English detection)
+STT_BEAM_SIZE_TAMIL        = 1   # Tamil fine-tune — greedy is sufficient
 
 # ── Pipeline flags ────────────────────────────────────────────────────────────
 ENABLE_TTS = False

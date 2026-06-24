@@ -2,8 +2,6 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import os
-import os
 import torch
 import re
 import sentencepiece as spm
@@ -144,7 +142,13 @@ class TranslationService:
         
         # 4. Load the C++ CTranslate2 Engine with int8 quantization
         compute_type = "int8_float16" if self.device == "cuda" else "int8"
-        model = ctranslate2.Translator(ct2_model_dir, device=self.device, compute_type=compute_type)
+        model = ctranslate2.Translator(
+            ct2_model_dir, 
+            device=self.device, 
+            compute_type=compute_type,
+            inter_threads=2,
+            intra_threads=4
+        )
 
         self._sp_src[model_name] = sp_src
         self._sp_tgt[model_name] = sp_tgt
@@ -156,7 +160,7 @@ class TranslationService:
         text: str,
         src_lang: str,
         tgt_lang: str | None = None,
-        max_new_tokens: int = 128     # FIXED: was max_length (counted input+output)
+        max_new_tokens: int = 96
     ) -> str:
         if src_lang in LANG_CODE_MAP:
             src_lang = LANG_CODE_MAP[src_lang]
@@ -174,7 +178,7 @@ class TranslationService:
         texts: list[str],
         src_lang: str,
         tgt_lang: str,
-        max_new_tokens: int = 128
+        max_new_tokens: int = 96
     ) -> list[str]:
         if not texts:
             return []
@@ -217,7 +221,7 @@ class TranslationService:
             source_tokens_batch,
             batch_type="tokens",
             max_decoding_length=max_new_tokens,
-            beam_size=2, 
+            beam_size=1, 
             no_repeat_ngram_size=3,
             repetition_penalty=1.15
         )
@@ -240,6 +244,15 @@ class TranslationService:
         )
 
         results = self.ip.postprocess_batch(decoded, lang=tgt_lang)
+
+        for i, (src, res) in enumerate(zip(texts, results)):
+            # Warn if output is suspiciously short relative to input
+            if len(res.split()) < len(src.split()) * 0.3 and len(src.split()) > 4:
+                print(
+                    f"[Translation] WARNING: Short output ratio "
+                    f"({len(res.split())} words from {len(src.split())} word input) "
+                    f"— possible truncation. Input: '{src[:60]}'"
+                )
 
         # Sanitize IndicProcessor boundary artifacts from all results
         results = [_sanitize_translation(r) for r in results]

@@ -325,7 +325,11 @@ class ConnectionState:
         self.silence_samples   = 0
         self.target_lang       = "ta"
         self.source_lang       = ""
-        self.stt_context       = ""
+        self.detected_language_lock = ""
+        self.stt_context       = (
+            "இராம்ராஜ் காட்டன் திருப்பூர் வேட்டி சட்டை நெசவு தொழில் ஏற்றுமதி "
+            "Ramraj Cotton Tirupur veshti shirt weaving export quality"
+        )
         self.meeting_id        = None   # set at connect time, not lazily
         self.cancel_event      = threading.Event()
 
@@ -439,6 +443,7 @@ async def websocket_translate(websocket: WebSocket):
                         logger.info("[Config] target_lang → %s", state.target_lang)
                     if "source_lang" in ctrl:
                         state.source_lang = ctrl["source_lang"]
+                        state.detected_language_lock = ""
                         logger.info("[Config] source_lang → %s", state.source_lang)
                     if "environment" in ctrl:
                         preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])
@@ -548,7 +553,7 @@ async def _run_pipeline(
             None,
             lambda: router.process_audio(
                 audio,
-                source_lang=state.source_lang,
+                source_lang=state.detected_language_lock or state.source_lang,
                 target_lang=state.target_lang,
                 stt_context=state.stt_context,
                 skip_vad=True,
@@ -560,6 +565,12 @@ async def _run_pipeline(
 
         if not result.get("translated_text"):
             return
+
+        if (result.get("language_prob", 0) > 0.85
+                and result.get("src_lang") in ("ta", "en", "hi", "te", "kn", "ml")
+                and not state.detected_language_lock):
+            state.detected_language_lock = result["src_lang"]
+            pl_logger.info("[Pipeline] Language lock set: %s", state.detected_language_lock)
 
         pl_logger.info(
             "[Pipeline] %s → %s | '%s' → '%s' | %.0fms",

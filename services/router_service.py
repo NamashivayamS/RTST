@@ -1,11 +1,9 @@
-from services import chunking_service
 import threading
 import queue
 import time
 import sys
 import os
 import itertools
-import threading
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -396,6 +394,23 @@ class RouterService:
                 punctuated_text = cleaned_text
                 print(f"[Pipeline] Punctuation skipped (Tamil input)")
 
+            # ── Minimum word gate ─────────────────────────────────────────
+            # Short fragments (≤3 words) produce garbage translations.
+            # Skip them rather than wasting GPU time on nonsense output.
+            word_count = len(punctuated_text.split())
+            if word_count < 4:
+                print(
+                    f"[Pipeline] Fragment gate: {word_count} words — "
+                    f"skipping translation: '{punctuated_text}'"
+                )
+                return {
+                    **self._empty_result(),
+                    "raw_text": raw_text,
+                    "src_lang": src_lang,
+                    "tgt_lang": "",
+                    "translated_text": "",
+                }
+
             # ── 5. Translation ────────────────────────────────────────────────────
             if cancel_event and cancel_event.is_set():
                 print(f"[REQUEST {request_id}] CANCELLED BEFORE TRANSLATION - Client disconnected")
@@ -431,22 +446,6 @@ class RouterService:
             else:
                 chunks = []
                 total = 0
-
-            # if ENABLE_TTS:
-            #     chunks = self.chunking_service.split_text_for_tts(refined_text)
-            #     total = len(chunks)
-
-            #     for idx, chunk in enumerate(chunks, start=1):
-            #         self.tts_input_queue.put({
-            #             "text": chunk,
-            #             "chunk_index": idx,
-            #             "total_chunks": total,
-            #         })
-            # else:
-            #     chunks = []
-            #     total = 0
-            
-            
 
             for idx, chunk in enumerate(chunks, start=1):
                 print(f"[Pipeline] Queuing TTS chunk {idx}/{total}: '{chunk}'")

@@ -52,7 +52,7 @@ class VADService:
             sampling_rate=self.sampling_rate,
             return_seconds=return_seconds,
             threshold=VAD_THRESHOLD,
-            min_speech_duration_ms=50
+            min_speech_duration_ms=200
         )
 
         return segments

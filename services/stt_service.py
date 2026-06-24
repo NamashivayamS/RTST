@@ -54,7 +54,7 @@ def _is_hallucination(text: str) -> bool:
     return any(r.match(t) for r in _HALLUCINATION_RE)
 
 
-from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, STT_BEAM_SIZE
+from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, STT_BEAM_SIZE, STT_BEAM_SIZE_TAMIL
 
 class STTService:
     """
@@ -85,12 +85,13 @@ class STTService:
 
     # Tanglish detection: fraction of words that appear to be English
     # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
-    TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.25
+    TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.40
 
     def __init__(self, beam_size: int = STT_BEAM_SIZE):
         self.model       = whisper_model
         self.tamil_model = tamil_whisper_model  # None if not available
-        self.beam_size   = beam_size
+        self.beam_size       = beam_size
+        self.beam_size_tamil = STT_BEAM_SIZE_TAMIL
 
         if self.tamil_model is not None:
             print("STTService initialized with DUAL-MODEL routing (Turbo + Tamil).")
@@ -128,13 +129,13 @@ class STTService:
             print("[STT] Tamil-First Mode active: Bypassing primary model directly to Tamil model.")
             segments_gen, info = self.tamil_model.transcribe(
                 audio_input,
-                beam_size=self.beam_size,
+                beam_size=self.beam_size_tamil,
                 language="ta",
                 initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200,
+                    min_silence_duration_ms=400,
+                    speech_pad_ms=100,
                     min_speech_duration_ms=200,
                 ),
                 condition_on_previous_text=False,
@@ -150,8 +151,8 @@ class STTService:
                 initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200,
+                    min_silence_duration_ms=400,
+                    speech_pad_ms=100,
                     min_speech_duration_ms=200,
                 ),
                 condition_on_previous_text=False,
@@ -167,13 +168,13 @@ class STTService:
                 print("[STT] Primary model detected Tamil. Re-routing through specialized Tamil model...")
                 segments_gen_ta, info_ta = self.tamil_model.transcribe(
                     audio_input,
-                    beam_size=self.beam_size,
+                    beam_size=self.beam_size_tamil,
                     language="ta",
                     initial_prompt=initial_prompt,
                     vad_filter=True,
                     vad_parameters=dict(
-                        min_silence_duration_ms=500,
-                        speech_pad_ms=200,
+                        min_silence_duration_ms=400,
+                        speech_pad_ms=100,
                         min_speech_duration_ms=200,
                     ),
                     condition_on_previous_text=False,
@@ -207,12 +208,14 @@ class STTService:
                 initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200,
+                    min_silence_duration_ms=400,
+                    speech_pad_ms=100,
                     min_speech_duration_ms=200,
                 ),
                 condition_on_previous_text=False,
                 temperature=0.2,   # add slight randomness to escape local optima
+                repetition_penalty=1.3,
+                no_repeat_ngram_size=3,
             )
             retry_segments = list(retry_gen)
             retry_quality  = self._assess_segment_quality(retry_segments)

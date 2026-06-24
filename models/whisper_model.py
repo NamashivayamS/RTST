@@ -4,6 +4,10 @@ import os
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# int8_float16 uses tensor cores (faster) but needs FP16 support.
+# RTX 3050 supports FP16, so this is safe. Falls back to int8 on CPU.
+COMPUTE_TYPE = "int8_float16" if DEVICE == "cuda" else "int8"
+
 PRIMARY_MODEL = "medium"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TAMIL_MODEL_PATH = os.path.join(PROJECT_ROOT, "whisper-tamil-medium-ct2")
@@ -14,14 +18,14 @@ try:
     whisper_model = WhisperModel(
         PRIMARY_MODEL,
         device=DEVICE,
-        compute_type="int8_float16" if DEVICE == "cuda" else "int8"
+        compute_type=COMPUTE_TYPE
     )
 except Exception as e:
     print(f"Error loading primary model: {e}. Downloading '{PRIMARY_MODEL}'...")
     whisper_model = WhisperModel(
         PRIMARY_MODEL,
         device=DEVICE,
-        compute_type="int8_float16" if DEVICE == "cuda" else "int8",
+        compute_type=COMPUTE_TYPE,
         local_files_only=False
     )
 
@@ -33,7 +37,7 @@ try:
         tamil_whisper_model = WhisperModel(
             TAMIL_MODEL_PATH,
             device=DEVICE,
-            compute_type="int8_float16" if DEVICE == "cuda" else "int8"
+            compute_type=COMPUTE_TYPE
         )
         print("Tamil Model Loaded Successfully!")
     else:
