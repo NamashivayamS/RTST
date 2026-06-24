@@ -326,6 +326,7 @@ class ConnectionState:
         self.target_lang       = "ta"
         self.source_lang       = ""
         self.detected_language_lock = ""
+        self.language_divergence_count = 0
         self.stt_context       = (
             "இராம்ராஜ் காட்டன் திருப்பூர் வேட்டி சட்டை நெசவு தொழில் ஏற்றுமதி "
             "Ramraj Cotton Tirupur veshti shirt weaving export quality"
@@ -565,6 +566,21 @@ async def _run_pipeline(
 
         if not result.get("translated_text"):
             return
+
+        # ── Language Switch Fallback Drop ──
+        # If the user is locked to Tamil but starts speaking English, the STT service's 
+        # latin_ratio check will reclassify the output src_lang to "en".
+        # If this divergence happens 2 times in a row, we assume a complete language switch and break the lock.
+        if state.detected_language_lock:
+            if result.get("src_lang") != state.detected_language_lock:
+                state.language_divergence_count += 1
+                pl_logger.warning("[Pipeline] Language divergence detected. Locked: %s, Output: %s. Strike %d/2.", state.detected_language_lock, result.get("src_lang"), state.language_divergence_count)
+                if state.language_divergence_count >= 2:
+                    pl_logger.warning("[Pipeline] Breaking language lock to force re-detection.")
+                    state.detected_language_lock = ""
+                    state.language_divergence_count = 0
+            else:
+                state.language_divergence_count = 0
 
         if (result.get("language_prob", 0) > 0.85
                 and result.get("src_lang") in ("ta", "en", "hi", "te", "kn", "ml")
