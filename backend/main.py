@@ -582,7 +582,9 @@ async def _run_pipeline(
             else:
                 state.language_divergence_count = 0
 
-        if (result.get("language_prob", 0) > 0.85
+        # Only apply the auto-lock if the user is in 'Auto' mode (source_lang is empty)
+        if (state.source_lang == ""
+                and result.get("language_prob", 0) > 0.85
                 and result.get("src_lang") in ("ta", "en", "hi", "te", "kn", "ml")
                 and not state.detected_language_lock):
             state.detected_language_lock = result["src_lang"]
