@@ -492,6 +492,16 @@ async def websocket_translate(websocket: WebSocket):
                         )
             else:
                 state.silence_samples += len(chunk)
+
+                # ── Turn-Taking Silence Timeout (Auto Language Fix) ──
+                # If there is >2.0s of silence, we assume the speaker finished their turn.
+                # Clear the lock and context so the next speaker's language is cleanly detected.
+                if state.silence_samples >= int(2.0 * SAMPLE_RATE):
+                    if state.detected_language_lock or state.stt_context:
+                        logger.info("[Pipeline] Turn-taking detected (2.0s silence). Clearing language lock and context.")
+                        state.detected_language_lock = ""
+                        state.stt_context = ""
+                        state.language_divergence_count = 0
                 if state.was_speaking and state.silence_samples >= state.silence_samples_limit:
                     state.was_speaking = False
                     if (
