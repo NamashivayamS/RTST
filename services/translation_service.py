@@ -146,7 +146,7 @@ class TranslationService:
             ct2_model_dir, 
             device=self.device, 
             compute_type=compute_type,
-            inter_threads=2,
+            inter_threads=1,    # Single request at a time (serialized by lock)
             intra_threads=4
         )
 

@@ -533,6 +533,8 @@ async def _run_pipeline(
         utt_id        = f"utt_{uuid.uuid4().hex[:8]}"
         enc_temp_path = os.path.join(PROJECT_ROOT, "temp_audio", f"{utt_id}.wav.enc")
 
+        # Fire encryption in parallel — not needed by translation pipeline
+        enc_task = None
         if _server_public_key is not None:
             def _encrypt_and_save():
                 import io
@@ -543,7 +545,7 @@ async def _run_pipeline(
                 with open(enc_temp_path, "wb") as f:
                     f.write(encrypted_audio)
 
-            await loop.run_in_executor(None, _encrypt_and_save)
+            enc_task = loop.run_in_executor(None, _encrypt_and_save)
         else:
             pl_logger.debug(
                 "[Pipeline] Skipping audio encryption (no public key loaded)."
@@ -565,6 +567,8 @@ async def _run_pipeline(
         )
 
         if not result.get("translated_text"):
+            if enc_task is not None:
+                await enc_task
             return
 
         # ── Language Switch Fallback Drop ──
@@ -603,6 +607,21 @@ async def _run_pipeline(
         if words:
             state.stt_context = " ".join(words[-5:])
 
+        # ── Send subtitle FIRST (user sees result immediately) ─────────────────
+        await manager.send_json(websocket, {
+            "type":         "subtitle",
+            "utterance_id": utt_id,
+            "text":         result["translated_text"],
+            "source_text":  result.get("punctuated_text") or result.get("raw_text") or "",
+            "src_lang":     result["src_lang"],
+            "tgt_lang":     result["tgt_lang"],
+            "confidence":   result.get("language_prob"),
+        })
+
+        # ── Ensure encryption completed (was running in parallel) ──────────────
+        if enc_task is not None:
+            await enc_task
+
         # ── Save to DB (Fix 9: failures are logged with traceback) ─────────────
         if state.meeting_id:
             def _save():
@@ -624,17 +643,6 @@ async def _run_pipeline(
                     )
 
             await loop.run_in_executor(None, _save)
-
-        # ── Send subtitle ──────────────────────────────────────────────────────
-        await manager.send_json(websocket, {
-            "type":         "subtitle",
-            "utterance_id": utt_id,
-            "text":         result["translated_text"],
-            "source_text":  result.get("punctuated_text") or result.get("raw_text") or "",
-            "src_lang":     result["src_lang"],
-            "tgt_lang":     result["tgt_lang"],
-            "confidence":   result.get("language_prob"),
-        })
 
         # ── Stream TTS audio chunks ────────────────────────────────────────────
         total_chunks = result["total_chunks"]

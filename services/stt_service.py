@@ -24,10 +24,10 @@ TAMIL_CONFUSED_AS = set()
 TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different scripts
 
 # ── Confidence-based retry thresholds ─────────────────────────────────────────
-RETRY_AVG_LOGPROB_THRESHOLD  = -1.0   # below this = poor transcription quality
+RETRY_AVG_LOGPROB_THRESHOLD  = -1.5   # below this = poor transcription quality (tightened for latency)
 RETRY_COMPRESSION_RATIO_MAX  = 3.2    # above this = hallucination, reject not retry
 RETRY_NO_SPEECH_THRESHOLD    = 0.80   # above this = bad audio, worth retrying
-RETRY_BEAM_SIZE              = 10     # beam size for retry pass
+RETRY_BEAM_SIZE              = 3      # beam size for retry pass (reduced for latency)
 
 # Hallucination phrases Whisper emits for near-silence in Tamil context.
 # If the full transcription matches one of these, treat it as empty.
@@ -132,12 +132,7 @@ class STTService:
                 beam_size=self.beam_size_tamil,
                 language="ta",
                 initial_prompt=initial_prompt,
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=400,
-                    speech_pad_ms=100,
-                    min_speech_duration_ms=200,
-                ),
+                vad_filter=False,            # Already validated by streaming VAD
                 condition_on_previous_text=False,
                 temperature=0.0,
             )
@@ -149,12 +144,7 @@ class STTService:
                 beam_size=self.beam_size,
                 language=language,
                 initial_prompt=initial_prompt,
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=400,
-                    speech_pad_ms=100,
-                    min_speech_duration_ms=200,
-                ),
+                vad_filter=False,            # Already validated by streaming VAD
                 condition_on_previous_text=False,
                 temperature=0.0,
             )
@@ -171,12 +161,7 @@ class STTService:
                     beam_size=self.beam_size_tamil,
                     language="ta",
                     initial_prompt=initial_prompt,
-                    vad_filter=True,
-                    vad_parameters=dict(
-                        min_silence_duration_ms=400,
-                        speech_pad_ms=100,
-                        min_speech_duration_ms=200,
-                    ),
+                    vad_filter=False,            # Already validated by streaming VAD
                     condition_on_previous_text=False,
                     temperature=0.0,
                 )

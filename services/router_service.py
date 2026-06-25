@@ -12,6 +12,8 @@ if PROJECT_ROOT not in sys.path:
 
 from config import ENABLE_TTS
 
+# ── CPU models (Must load FIRST to prevent Windows CUDA crash) ────────────────
+from services.punctuation_service import PunctuationService
 from services.correction_service  import CorrectionService
 from services.refinement_service  import RefinementService
 
@@ -56,11 +58,6 @@ class RouterService:
 
         self.request_counter = itertools.count(1)
 
-        # CPU-bound first — punctuation model must load before Whisper
-        # IMPORTANT: We import PunctuationService inside __init__ rather than globally.
-        # This prevents auto-formatters from alphabetically sorting the import below Whisper,
-        # which would cause a silent CUDA crash on Windows.
-        from services.punctuation_service import PunctuationService
         self.correction_service  = CorrectionService()
         self.punctuation_service = PunctuationService()
         self.refinement_service  = RefinementService()

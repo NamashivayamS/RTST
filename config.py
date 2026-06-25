@@ -49,21 +49,21 @@ MAX_PIPELINE_QUEUE = 2
 ENVIRONMENT_PRESETS = {
     "quiet": {
         "vad_threshold":       0.60,
-        "silence_sec":         0.8,
+        "silence_sec":         0.7,
         "min_speech_sec":      0.50,
         "no_speech_threshold": 0.95,
         "rms_gate":            0.005,
     },
     "conference": {
         "vad_threshold":       0.70,
-        "silence_sec":         0.9,
+        "silence_sec":         0.7,
         "min_speech_sec":      0.50,
         "no_speech_threshold": 0.85,
         "rms_gate":            0.010,
     },
     "noisy": {
         "vad_threshold":       0.80,
-        "silence_sec":         1.0,
+        "silence_sec":         0.8,
         "min_speech_sec":      0.80,
         "no_speech_threshold": 0.75,
         "rms_gate":            0.015,
