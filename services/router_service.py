@@ -240,7 +240,6 @@ class RouterService:
 
         pipeline_start = time.perf_counter()
         _stt_lock_held = False
-        _translation_lock_held = False
 
         if cancel_event and cancel_event.is_set():
             print(f"[REQUEST {request_id}] CANCELLED - Client disconnected")
@@ -408,59 +407,16 @@ class RouterService:
                     "translated_text": "",
                 }
 
-            # ── 5. Translation ────────────────────────────────────────────────────
-            if cancel_event and cancel_event.is_set():
-                print(f"[REQUEST {request_id}] CANCELLED BEFORE TRANSLATION - Client disconnected")
-                return self._empty_result()
-                
-            if not self.translation_lock.acquire(timeout=10.0):
-                print(f"[REQUEST {request_id}] SKIPPED - Translation lock timeout")
-                return self._empty_result()
-            _translation_lock_held = True
-
-            translation_start = time.perf_counter()
-            translation_result = self.translation_service.translate_auto(
-                punctuated_text,
-                detected_language=src_lang,
-                target_language=target_lang
-            )
-            translation_time = time.perf_counter() - translation_start
-            self.translation_lock.release()   # Release Translation lock
-            _translation_lock_held = False
-
-            print(f"[Pipeline] Translated: {translation_result['translated_text']}")
-
-            # ── 6. Refinement ─────────────────────────────────────────────────────
-            refined_text = self.refinement_service.refine_auto(translation_result)
-            print(f"[Pipeline] Refined   : {refined_text}")
-
-            # ── 7. Chunk + queue for TTS ──────────────────────────────────────────
-            if ENABLE_TTS:
-                chunks = self.chunking_service.split_text_for_tts(
-                    refined_text
-                )
-                total = len(chunks)
-            else:
-                chunks = []
-                total = 0
-
-            for idx, chunk in enumerate(chunks, start=1):
-                print(f"[Pipeline] Queuing TTS chunk {idx}/{total}: '{chunk}'")
-                self.tts_input_queue.put({
-                    "text":         chunk,
-                    "chunk_index":  idx,
-                    "total_chunks": total,
-                })
-                print(
-                    f"[QUEUE] TTS Input="
-                    f"{self.tts_input_queue.qsize()}"
-                )
+            # ── 5. Return STT result for window translation in main.py ─────────
+            # process_audio() intentionally stops here. Translation is handled
+            # by translate_with_window() which main.py calls separately.
+            # This prevents triple-translation and ensures both draft + accurate
+            # passes run under a single translation_lock acquisition.
 
             total_time = time.perf_counter() - pipeline_start
             print(
                 f"[LATENCY] "
                 f"STT={stt_time:.3f}s "
-                f"TRANS={translation_time:.3f}s "
                 f"TOTAL={total_time:.3f}s"
             )
 
@@ -468,12 +424,10 @@ class RouterService:
                 "raw_text": raw_text,
                 "cleaned_text": cleaned_text,
                 "punctuated_text": punctuated_text,
-                "translated_text": refined_text,
                 "src_lang": src_lang,
-                "tgt_lang": translation_result["tgt_lang"],
-                "chunks": chunks,
-                "total_chunks": total,
-                "total_time": time.perf_counter() - pipeline_start,
+                "is_tanglish": is_tanglish,
+                "stt_time": stt_time,
+                "total_time": total_time,
                 "language_prob": stt_result.get("language_prob", 0.0),
             }
 
@@ -483,9 +437,6 @@ class RouterService:
             if _stt_lock_held:
                 self.stt_lock.release()
                 _stt_lock_held = False
-            if _translation_lock_held:
-                self.translation_lock.release()
-                _translation_lock_held = False
             print(f"[REQUEST {request_id}] LOCKS RELEASED")
 
     def process_translation(self, translated_text: str) -> dict:
@@ -540,12 +491,224 @@ class RouterService:
     # Helpers
     # ──────────────────────────────────────────────────────────────────────────
 
+    def translate_with_window(
+        self,
+        current_text: str,
+        window: list[str],
+        src_lang: str,
+        target_lang: str,
+    ) -> dict:
+        """
+        Sliding-window re-translation for improved contextual accuracy.
+
+        Runs TWO translations under ONE translation_lock acquisition:
+
+          Pass 1 — current chunk alone   → fast draft   (~150ms)
+          Pass 2 — window + current      → accurate     (~200-250ms)
+
+        Both passes share the GPU lock so no other request can interleave.
+        Total added latency vs single-pass: ~50-100ms (only the 2nd call).
+
+        Args:
+            current_text : corrected/punctuated source text for this chunk
+            window       : list of previous source texts (max TRANSLATION_WINDOW_SIZE-1)
+            src_lang     : ISO 639-1 code ("ta", "en", etc.)
+            target_lang  : user-selected target ("ta", "en", etc.)
+
+        Returns:
+            {
+                "draft_translation":    str,
+                "accurate_translation": str,
+                "window_was_used":      bool,
+                "src_indic":            str,   # IndicTrans2 source code
+                "tgt_indic":            str,   # IndicTrans2 target code
+                "translation_time":     float, # seconds for both passes
+            }
+        """
+        from services.translation_service import LANG_CODE_MAP, DEFAULT_TARGET_MAP
+
+        # ── Resolve ISO codes to IndicTrans2 codes ────────────────────────
+        src_indic = LANG_CODE_MAP.get(src_lang)
+        if src_indic is None:
+            print(f"[Window] Unsupported src_lang '{src_lang}' — skipping translation.")
+            return {
+                "draft_translation": current_text,
+                "accurate_translation": current_text,
+                "window_was_used": False,
+                "src_indic": "", "tgt_indic": "",
+                "translation_time": 0.0,
+            }
+
+        if src_lang == "en":
+            tgt_indic = LANG_CODE_MAP.get(target_lang, "tam_Taml")
+        else:
+            tgt_indic = "eng_Latn"
+
+        if src_indic == tgt_indic:
+            return {
+                "draft_translation": current_text,
+                "accurate_translation": current_text,
+                "window_was_used": False,
+                "src_indic": src_indic, "tgt_indic": tgt_indic,
+                "translation_time": 0.0,
+            }
+
+        # ── Acquire lock (or skip gracefully) ─────────────────────────────
+        if not self.translation_lock.acquire(timeout=10.0):
+            print("[Window] Translation lock timeout — skipping translation.")
+            return {
+                "draft_translation": current_text,
+                "accurate_translation": current_text,
+                "window_was_used": False,
+                "src_indic": src_indic, "tgt_indic": tgt_indic,
+                "translation_time": 0.0,
+            }
+
+        try:
+            t_start = time.perf_counter()
+
+            # ── Pass 1: translate current chunk alone (draft) ─────────────
+            draft = self.translation_service.translate(
+                current_text, src_indic, tgt_indic
+            )
+            t_pass1 = time.perf_counter()
+            print(f"[Window] Pass-1 (draft) : {t_pass1-t_start:.3f}s → '{draft[:80]}'")
+
+            # ── Pass 2: translate window + current combined (accurate) ────
+            # Only run if there is at least one previous chunk in the window.
+            # On the first utterance, window is empty → skip Pass 2.
+            #
+            # Key: after translating the combined text, we must EXTRACT only
+            # the current chunk's translation. The model outputs the full
+            # combined translation (prev + current), so we split by sentence
+            # boundaries and skip the sentences belonging to the window.
+            window_was_used = len(window) > 0
+            if window_was_used:
+                # ── Normalize window text with sentence-ending punctuation ──
+                # so the model produces a clean sentence boundary between
+                # the window's translation and the current chunk's translation.
+                window_parts = []
+                n_window_sentences = 0
+                for w in window:
+                    w = w.strip()
+                    if w and w[-1] not in '.!?।':
+                        w += '.'
+                    window_parts.append(w)
+                    n_window_sentences += self._count_sentences(w)
+
+                window_text = " ".join(window_parts)
+                combined = window_text + " " + current_text
+
+                # Use 2× max_new_tokens for the combined pass to prevent
+                # the model from truncating before it reaches the current chunk.
+                combined_max_tokens = 96 * (1 + len(window))
+                accurate_combined = self.translation_service.translate(
+                    combined, src_indic, tgt_indic,
+                    max_new_tokens=combined_max_tokens,
+                )
+                t_pass2 = time.perf_counter()
+                print(
+                    f"[Window] Pass-2 (raw combined): {t_pass2-t_pass1:.3f}s "
+                    f"→ '{accurate_combined[:100]}'"
+                )
+
+                # ── Extract only the current chunk's translation ───────────
+                accurate = self._extract_current_translation(
+                    accurate_combined, n_window_sentences
+                )
+                print(
+                    f"[Window] Pass-2 (extracted): "
+                    f"skipped {n_window_sentences} window sentence(s) "
+                    f"→ '{accurate[:80]}'"
+                )
+
+                # If extraction returned nothing, fall back to draft
+                if not accurate.strip():
+                    print("[Window] Extraction returned empty — falling back to draft")
+                    accurate = draft
+            else:
+                accurate = draft
+                print("[Window] Pass-2 skipped (first utterance — no previous window)")
+
+            translation_time = time.perf_counter() - t_start
+
+            return {
+                "draft_translation": draft,
+                "accurate_translation": accurate,
+                "window_was_used": window_was_used,
+                "src_indic": src_indic,
+                "tgt_indic": tgt_indic,
+                "translation_time": translation_time,
+            }
+
+        finally:
+            self.translation_lock.release()
+
+    # ── Sentence-boundary helpers for sliding-window extraction ────────────
+
+    @staticmethod
+    def _count_sentences(text: str) -> int:
+        """
+        Count sentences by splitting on sentence-ending punctuation.
+        Handles English (. ! ?), Hindi/Sanskrit (।), and Tamil text.
+        """
+        import re
+        text = text.strip()
+        if not text:
+            return 0
+        # Split on sentence-ending punctuation followed by space or end-of-string
+        parts = re.split(r'(?<=[.!?।])\s+', text)
+        return len([p for p in parts if p.strip()])
+
+    @staticmethod
+    def _extract_current_translation(
+        combined_translation: str,
+        n_window_sentences: int,
+    ) -> str:
+        """
+        Given the full translation of [window_text + current_text],
+        skip the first `n_window_sentences` sentences (which belong to
+        the window / context) and return only the remainder — the
+        accurate translation of the current chunk.
+
+        If the output has fewer sentences than expected, returns the
+        full combined text as a safe fallback (caller checks for empty).
+        """
+        import re
+        text = combined_translation.strip()
+        if n_window_sentences <= 0:
+            return text
+
+        # Split on sentence-ending punctuation followed by whitespace.
+        # re.split with a capturing group keeps the delimiters.
+        parts = re.split(r'((?<=[.!?।])\s+)', text)
+
+        # Rebuild into sentence segments (text + delimiter pairs)
+        sentences = []
+        current = ""
+        for part in parts:
+            current += part
+            # Check if this part ends with sentence-ending punctuation
+            if re.search(r'[.!?।]\s*$', current):
+                sentences.append(current)
+                current = ""
+        if current.strip():
+            sentences.append(current)  # last segment without trailing punct
+
+        if len(sentences) <= n_window_sentences:
+            # Couldn't split enough (model truncated early or merged everything).
+            # Return empty string to force the caller to fall back to the draft translation.
+            return ""
+
+        # Return everything after the window sentences
+        extracted = "".join(sentences[n_window_sentences:]).strip()
+        return extracted
+
     @staticmethod
     def _empty_result() -> dict:
         return {
             "raw_text": "", "cleaned_text": "", "punctuated_text": "",
-            "translated_text": "", "src_lang": "", "tgt_lang": "",
-            "chunks": [], "total_chunks": 0,
+            "src_lang": "", "language_prob": 0.0,
         }
 
 

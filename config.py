@@ -45,6 +45,11 @@ ENABLE_TTS = False
 # when sentences arrive faster than they can be processed.
 MAX_PIPELINE_QUEUE = 2
 
+# ── Sliding-window translation ────────────────────────────────────────────
+# 2 = keep 1 previous chunk + current chunk = 2-chunk window.
+# Increase to 3 for longer-context topics, but +100ms latency per extra chunk.
+TRANSLATION_WINDOW_SIZE = 2
+
 # ── Environment Presets ───────────────────────────────────────────────────────
 ENVIRONMENT_PRESETS = {
     "quiet": {

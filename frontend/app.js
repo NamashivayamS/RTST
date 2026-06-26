@@ -199,6 +199,7 @@ function connectWebSocket() {
         try { data = JSON.parse(event.data); } catch { return; }
 
         if (data.type === 'subtitle') handleSubtitle(data);
+        else if (data.type === 'subtitle_update') handleSubtitleUpdate(data);
         else if (data.type === 'done') handleDone(data);
     };
 
@@ -241,6 +242,7 @@ function handleSubtitle(data) {
         currentLiveCard = document.createElement('div');
         currentLiveCard.className = 't-card live-card';
         currentLiveCard.dataset.uttId = data.utterance_id;
+        currentLiveCard.dataset.utteranceId = data.utterance_id || '';  // for subtitle_update lookup
 
         const now = new Date();
         const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()]
@@ -265,6 +267,33 @@ function handleSubtitle(data) {
     }
 
     if (autoScrollToggle.checked) transcriptArea.scrollTop = transcriptArea.scrollHeight;
+}
+
+/**
+ * Handles subtitle_update: replaces the draft translation on an existing card
+ * with the more accurate window-based translation. Uses a brief CSS fade
+ * so the update feels smooth rather than jarring.
+ */
+function handleSubtitleUpdate(data) {
+    if (!data.text || !data.utterance_id) return;
+
+    // Find the card created for this utterance_id
+    const card = transcriptArea.querySelector(
+        `[data-utterance-id="${data.utterance_id}"]`
+    );
+    if (!card) return;  // card was cleared or doesn't exist — safe to ignore
+
+    const textEl = card.querySelector('.target-text');
+    if (!textEl) return;
+
+    // Replace text with the accurate translation + brief fade animation
+    textEl.classList.add('text-updating');
+    textEl.innerText = data.text;
+    textEl.addEventListener(
+        'animationend',
+        () => textEl.classList.remove('text-updating'),
+        { once: true }
+    );
 }
 
 function handleDone(data) {

@@ -19,6 +19,13 @@ Changes from demo version → production version:
 from dotenv import load_dotenv
 load_dotenv()
 
+# ── Force fully-offline mode for HuggingFace / Transformers ────────────────────
+# All models are already cached locally. This prevents the 30s retry delay
+# when the machine has no internet, and ensures zero external network calls.
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 import sys
 if sys.platform.startswith("win"):
     try:
@@ -71,6 +78,7 @@ from config import (
     STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD,
     DEFAULT_DEPARTMENT_ID, SERVER_PUBLIC_KEY_PATH,
     MAX_PIPELINE_QUEUE,                          # Fix 7: from config, not hardcoded
+    TRANSLATION_WINDOW_SIZE,                     # sliding-window re-translation depth
 )
 
 from backend.connection_manager import ConnectionManager
@@ -334,6 +342,13 @@ class ConnectionState:
         self.meeting_id        = None   # set at connect time, not lazily
         self.cancel_event      = threading.Event()
 
+        # ── Sliding-window translation context ────────────────────────────
+        # Stores the last TRANSLATION_WINDOW_SIZE-1 corrected source texts.
+        # On each new utterance, the window + new chunk are re-translated
+        # together for better contextual accuracy. Cleared on turn-taking
+        # silence timeout so cross-speaker context never bleeds through.
+        self.translation_window: list[str] = []
+
         self.vad_threshold         = VAD_THRESHOLD
         self.silence_samples_limit = int(VAD_SILENCE_SEC   * CFG_SAMPLE_RATE)
         self.min_speech_samples    = int(VAD_MIN_SPEECH_SEC * CFG_SAMPLE_RATE)
@@ -502,6 +517,10 @@ async def websocket_translate(websocket: WebSocket):
                         state.detected_language_lock = ""
                         state.stt_context = ""
                         state.language_divergence_count = 0
+                    if state.translation_window:
+                        logger.info("[Window] Clearing translation window on turn-taking timeout.")
+                        state.translation_window = []
+
                 if state.was_speaking and state.silence_samples >= state.silence_samples_limit:
                     state.was_speaking = False
                     if (
@@ -528,7 +547,7 @@ async def websocket_translate(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# ── Pipeline task ──────────────────────────────────────────────────────────────
+# ── Pipeline task ──────────────────────────────────────────────────────────
 async def _run_pipeline(
     websocket: WebSocket,
     audio: np.ndarray,
@@ -561,7 +580,7 @@ async def _run_pipeline(
                 "[Pipeline] Skipping audio encryption (no public key loaded)."
             )
 
-        # ── Run translation pipeline ───────────────────────────────────────────
+        # ── Step 1: Run STT pipeline (VAD → STT → Correction → Punctuation) ──
         result = await loop.run_in_executor(
             None,
             lambda: router.process_audio(
@@ -576,19 +595,24 @@ async def _run_pipeline(
             )
         )
 
-        if not result.get("translated_text"):
+        # Gate check: process_audio now returns punctuated_text (no translation).
+        # If STT produced nothing (silence, hallucination, fragment), skip.
+        input_text = result.get("punctuated_text", "")
+        if not input_text.strip():
             if enc_task is not None:
                 await enc_task
             return
 
+        src_lang = result.get("src_lang", "")
+
         # ── Language Switch Fallback Drop ──
-        # If the user is locked to Tamil but starts speaking English, the STT service's 
-        # latin_ratio check will reclassify the output src_lang to "en".
-        # If this divergence happens 2 times in a row, we assume a complete language switch and break the lock.
         if state.detected_language_lock:
-            if result.get("src_lang") != state.detected_language_lock:
+            if src_lang != state.detected_language_lock:
                 state.language_divergence_count += 1
-                pl_logger.warning("[Pipeline] Language divergence detected. Locked: %s, Output: %s. Strike %d/2.", state.detected_language_lock, result.get("src_lang"), state.language_divergence_count)
+                pl_logger.warning(
+                    "[Pipeline] Language divergence detected. Locked: %s, Output: %s. Strike %d/2.",
+                    state.detected_language_lock, src_lang, state.language_divergence_count
+                )
                 if state.language_divergence_count >= 2:
                     pl_logger.warning("[Pipeline] Breaking language lock to force re-detection.")
                     state.detected_language_lock = ""
@@ -599,34 +623,102 @@ async def _run_pipeline(
         # Only apply the auto-lock if the user is in 'Auto' mode (source_lang is empty)
         if (state.source_lang == ""
                 and result.get("language_prob", 0) > 0.85
-                and result.get("src_lang") in ("ta", "en", "hi", "te", "kn", "ml")
+                and src_lang in ("ta", "en", "hi", "te", "kn", "ml")
                 and not state.detected_language_lock):
-            state.detected_language_lock = result["src_lang"]
+            state.detected_language_lock = src_lang
             pl_logger.info("[Pipeline] Language lock set: %s", state.detected_language_lock)
 
-        pl_logger.info(
-            "[Pipeline] %s → %s | '%s' → '%s' | %.0fms",
-            result.get("src_lang"), result.get("tgt_lang"),
-            result.get("raw_text", "")[:60],
-            result.get("translated_text", "")[:60],
-            result.get("total_time", 0) * 1000,
-        )
-
-        # ── Update Context (Last ~5 words) ──
+        # ── Update STT context (last ~5 words for Whisper prompt) ──────────────
         words = result.get("raw_text", "").split()
         if words:
             state.stt_context = " ".join(words[-5:])
 
-        # ── Send subtitle FIRST (user sees result immediately) ─────────────────
+        # ── Step 2: Sliding-window two-pass translation ────────────────────────
+        #
+        # How it works:
+        #   Pass 1 (draft)    — translate current chunk alone.
+        #                       Sent to frontend immediately → perceived latency unchanged.
+        #   Pass 2 (accurate) — translate window[-1] + current chunk combined.
+        #                       Sent as subtitle_update → frontend quietly corrects the card.
+        #
+        # Both passes run inside translate_with_window() under ONE lock acquisition
+        # so no other pipeline request can interleave between them.
+        #
+        # Window management:
+        #   - Append current chunk after both passes complete.
+        #   - Keep only the last (TRANSLATION_WINDOW_SIZE - 1) chunks.
+        #     With TRANSLATION_WINDOW_SIZE=2, we always keep exactly 1 previous chunk.
+        #   - Window is cleared by the turn-taking silence timeout in the VAD loop.
+
+        window_result = await loop.run_in_executor(
+            None,
+            lambda: router.translate_with_window(
+                current_text=input_text,
+                window=list(state.translation_window),   # snapshot, not a reference
+                src_lang=src_lang,
+                target_lang=state.target_lang,
+            )
+        )
+
+        draft_text    = window_result["draft_translation"]
+        accurate_text = window_result["accurate_translation"]
+        window_used   = window_result["window_was_used"]
+        tgt_indic     = window_result["tgt_indic"]
+        trans_time    = window_result["translation_time"]
+
+        # Apply refinement to both outputs
+        draft_refined    = router.refinement_service.refine(draft_text,    tgt_lang=tgt_indic)
+        accurate_refined = router.refinement_service.refine(accurate_text, tgt_lang=tgt_indic)
+
+        # Append current chunk to window; keep only last (TRANSLATION_WINDOW_SIZE - 1) entries
+        if input_text.strip():
+            state.translation_window.append(input_text)
+            state.translation_window = state.translation_window[-(TRANSLATION_WINDOW_SIZE - 1):]
+
+        total_time = result.get("stt_time", 0) + trans_time
+
+        pl_logger.info(
+            "[Pipeline] %s → %s | '%s' → '%s' | STT=%.0fms TRANS=%.0fms TOTAL=%.0fms",
+            src_lang, tgt_indic,
+            result.get("raw_text", "")[:60],
+            draft_refined[:60],
+            result.get("stt_time", 0) * 1000,
+            trans_time * 1000,
+            total_time * 1000,
+        )
+
+        if window_used:
+            pl_logger.info(
+                "[Window] draft='%s' | accurate='%s'",
+                draft_refined[:60], accurate_refined[:60],
+            )
+
+        # ── Send draft subtitle FIRST (user sees it at same time as before) ────
         await manager.send_json(websocket, {
             "type":         "subtitle",
             "utterance_id": utt_id,
-            "text":         result["translated_text"],
-            "source_text":  result.get("punctuated_text") or result.get("raw_text") or "",
-            "src_lang":     result["src_lang"],
-            "tgt_lang":     result["tgt_lang"],
+            "text":         draft_refined,
+            "source_text":  input_text,
+            "src_lang":     src_lang,
+            "tgt_lang":     tgt_indic,
             "confidence":   result.get("language_prob"),
+            "is_draft":     window_used,   # True only if an update will follow
         })
+
+        # ── Send accurate update if the window improved the translation ─────────
+        if window_used and accurate_refined.strip() != draft_refined.strip():
+            await manager.send_json(websocket, {
+                "type":         "subtitle_update",
+                "utterance_id": utt_id,
+                "text":         accurate_refined,
+                "source_text":  input_text,
+                "src_lang":     src_lang,
+                "tgt_lang":     tgt_indic,
+            })
+            pl_logger.info("[Window] subtitle_update sent for %s", utt_id)
+
+        # Use accurate_refined as the DB record (most correct version)
+        final_text = accurate_refined
 
         # ── Ensure encryption completed (was running in parallel) ──────────────
         if enc_task is not None:
@@ -638,14 +730,13 @@ async def _run_pipeline(
                 try:
                     save_utterance(
                         meeting_id=state.meeting_id,
-                        source_text=result.get("punctuated_text") or result.get("raw_text") or "",
-                        translated_text=result.get("translated_text", ""),
-                        source_language=result.get("src_lang", ""),
-                        target_language=result.get("tgt_lang", ""),
-                        total_latency_ms=int(result.get("total_time", 0) * 1000),
+                        source_text=input_text,
+                        translated_text=final_text,
+                        source_language=src_lang,
+                        target_language=tgt_indic,
+                        total_latency_ms=int(total_time * 1000),
                     )
                 except Exception:
-                    # ERROR level + exc_info=True → full traceback in log file
                     logging.getLogger("ispeak.db").error(
                         "[DB] save_utterance failed for meeting %s",
                         state.meeting_id,
@@ -655,9 +746,19 @@ async def _run_pipeline(
             await loop.run_in_executor(None, _save)
 
         # ── Stream TTS audio chunks ────────────────────────────────────────────
-        total_chunks = result["total_chunks"]
-        chunks_sent  = 0
+        if ENABLE_TTS:
+            tts_chunks = router.chunking_service.split_text_for_tts(final_text)
+            total_chunks = len(tts_chunks)
+            for idx, chunk in enumerate(tts_chunks, start=1):
+                router.tts_input_queue.put({
+                    "text":         chunk,
+                    "chunk_index":  idx,
+                    "total_chunks": total_chunks,
+                })
+        else:
+            total_chunks = 0
 
+        chunks_sent = 0
         for _ in range(total_chunks):
             payload = await loop.run_in_executor(
                 None,
@@ -684,7 +785,7 @@ async def _run_pipeline(
         await manager.send_json(websocket, {
             "type":         "done",
             "total_chunks": chunks_sent,
-            "latency_ms":   round(result.get("total_time", 0) * 1000),
+            "latency_ms":   round(total_time * 1000),
         })
 
     except Exception:
@@ -704,3 +805,4 @@ async def _run_pipeline(
             state.pending_utterance = None
             state.active_tasks     += 1
             asyncio.create_task(_run_pipeline(websocket, next_utt, state, loop))
+
