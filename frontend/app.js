@@ -6,7 +6,7 @@ let analyser = null;
 let dataArray = null;
 let animationId = null;
 let idleAnimId = null;   // separate loop for idle wave
-let idlePhase  = 0;      // phase counter for idle sine
+let idlePhase = 0;      // phase counter for idle sine
 
 let timerInterval = null;
 let secondsElapsed = 0;
@@ -16,38 +16,38 @@ let fullTranscriptText = "";
 let currentLiveCard = null;
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const micBtn          = document.getElementById('micBtn');
-const micStatusText   = document.getElementById('micStatusText');
-const transcriptArea  = document.getElementById('transcriptArea');
-const emptyState      = document.getElementById('emptyState');
+const micBtn = document.getElementById('micBtn');
+const micStatusText = document.getElementById('micStatusText');
+const transcriptArea = document.getElementById('transcriptArea');
+const emptyState = document.getElementById('emptyState');
 const autoScrollToggle = document.getElementById('autoScrollToggle');
 
-const timerDisplay    = document.getElementById('timer');
-const statDuration    = document.getElementById('statDuration');
-const statWords       = document.getElementById('statWords');
-const statLatency     = document.getElementById('statLatency');
+const timerDisplay = document.getElementById('timer');
+const statDuration = document.getElementById('statDuration');
+const statWords = document.getElementById('statWords');
+const statLatency = document.getElementById('statLatency');
 
-const wsStatusDot     = document.getElementById('wsStatusDot');
-const wsStatusText    = document.getElementById('wsStatusText');
-const dbStatusEl      = document.getElementById('dbStatus');
-const dbStatusText    = document.getElementById('dbStatusText');
+const wsStatusDot = document.getElementById('wsStatusDot');
+const wsStatusText = document.getElementById('wsStatusText');
+const dbStatusEl = document.getElementById('dbStatus');
+const dbStatusText = document.getElementById('dbStatusText');
 
-const dashWsDot       = document.getElementById('dashWsDot');
-const dashWsText      = document.getElementById('dashWsText');
+const dashWsDot = document.getElementById('dashWsDot');
+const dashWsText = document.getElementById('dashWsText');
 
 const sourceLangSelect = document.getElementById('sourceLang');
 const targetLangSelect = document.getElementById('targetLang');
-const envSelect       = document.getElementById('envSelect');
-const hdrSourceLang   = document.getElementById('hdrSourceLang');
-const hdrTargetLang   = document.getElementById('hdrTargetLang');
+const envSelect = document.getElementById('envSelect');
+const hdrSourceLang = document.getElementById('hdrSourceLang');
+const hdrTargetLang = document.getElementById('hdrTargetLang');
 
-const exportTxtBtn    = document.getElementById('exportTxtBtn');
-const toggleLeftBtn   = document.getElementById('toggleLeftBtn');
-const toggleRightBtn  = document.getElementById('toggleRightBtn');
-const appContainer    = document.querySelector('.app-container');
+const exportTxtBtn = document.getElementById('exportTxtBtn');
+const toggleLeftBtn = document.getElementById('toggleLeftBtn');
+const toggleRightBtn = document.getElementById('toggleRightBtn');
+const appContainer = document.querySelector('.app-container');
 
-const canvas          = document.getElementById('waveform');
-const canvasCtx       = canvas.getContext('2d');
+const canvas = document.getElementById('waveform');
+const canvasCtx = canvas.getContext('2d');
 
 // ── Waveform helpers (defined FIRST before any calls) ─────────────────────────
 const NUM_BARS = 38;
@@ -56,8 +56,8 @@ const NUM_BARS = 38;
 function barColor(i, alpha) {
     const t = i / (NUM_BARS - 1);
     const hue = Math.round(300 - t * 80);   // 300 → 220
-    const sat = Math.round(80  + t * 5);    // 80  → 85
-    const lit = Math.round(62  - t * 8);    // 62  → 54
+    const sat = Math.round(80 + t * 5);    // 80  → 85
+    const lit = Math.round(62 - t * 8);    // 62  → 54
     return `hsla(${hue},${sat}%,${lit}%,${alpha})`;
 }
 
@@ -66,14 +66,14 @@ function drawCapsule(x, halfH, barW, colorTop, colorBot) {
     const W = canvas;
     const H = canvas.height;
     const cy = H / 2;
-    const y  = cy - halfH;
-    const h  = halfH * 2;
-    const r  = barW / 2;
+    const y = cy - halfH;
+    const h = halfH * 2;
+    const r = barW / 2;
 
     const grad = canvasCtx.createLinearGradient(x, y, x, y + h);
-    grad.addColorStop(0,   colorTop);
+    grad.addColorStop(0, colorTop);
     grad.addColorStop(0.5, colorTop.replace(/,[\d.]+\)$/, ',1.0)'));
-    grad.addColorStop(1,   colorBot);
+    grad.addColorStop(1, colorBot);
     canvasCtx.fillStyle = grad;
 
     canvasCtx.beginPath();
@@ -96,16 +96,16 @@ function drawSilentWaveform() {
     canvasCtx.clearRect(0, 0, W, H);
 
     const slotW = W / NUM_BARS;
-    const barW  = slotW * 0.55;
+    const barW = slotW * 0.55;
 
     for (let i = 0; i < NUM_BARS; i++) {
         // Continuous dots pulsing slightly in opacity
-        const sine   = Math.sin((i / NUM_BARS) * Math.PI * 3 + idlePhase);
-        const alpha  = 0.15 + ((sine + 1) / 2) * 0.4; // Opacity between 0.15 and 0.55
-        
-        const cx     = slotW * i + slotW / 2;
-        const cy     = H / 2;
-        const r      = barW / 2;
+        const sine = Math.sin((i / NUM_BARS) * Math.PI * 3 + idlePhase);
+        const alpha = 0.15 + ((sine + 1) / 2) * 0.4; // Opacity between 0.15 and 0.55
+
+        const cx = slotW * i + slotW / 2;
+        const cy = H / 2;
+        const r = barW / 2;
 
         canvasCtx.beginPath();
         canvasCtx.arc(cx, cy, r, 0, 2 * Math.PI);
@@ -135,20 +135,20 @@ function drawWaveform() {
     const H = canvas.height;
     canvasCtx.clearRect(0, 0, W, H);
 
-    const slotW  = W / NUM_BARS;
-    const barW   = slotW * 0.60;
-    const maxH   = H / 2 - 2;
+    const slotW = W / NUM_BARS;
+    const barW = slotW * 0.60;
+    const maxH = H / 2 - 2;
 
     for (let i = 0; i < NUM_BARS; i++) {
         // Sample from frequency bins, weighting toward lower-mid (speech) range
         const binIdx = Math.floor((i / NUM_BARS) * (dataArray.length * 0.75));
-        const norm   = dataArray[binIdx] / 255.0;
+        const norm = dataArray[binIdx] / 255.0;
 
         // Slight gaussian envelope so centre bars are taller when loud
-        const env    = Math.exp(-Math.pow((i / NUM_BARS - 0.5) * 2.2, 2) * 0.5);
-        const halfH  = Math.max(3, (norm * 0.8 + norm * norm * 0.2) * maxH * (0.55 + env * 0.65));
+        const env = Math.exp(-Math.pow((i / NUM_BARS - 0.5) * 2.2, 2) * 0.5);
+        const halfH = Math.max(3, (norm * 0.8 + norm * norm * 0.2) * maxH * (0.55 + env * 0.65));
 
-        const x   = slotW * i + (slotW - barW) / 2;
+        const x = slotW * i + (slotW - barW) / 2;
         const top = barColor(i, 0.90);
         const bot = barColor(i, 0.65);
         drawCapsule(x, halfH, barW, top, bot);
@@ -371,7 +371,7 @@ async function startRecording() {
 
         const nativeRate = audioContext.sampleRate;  // e.g. 48000
         const targetRate = 16000;
-        const ratio     = nativeRate / targetRate;   // e.g. 3.0
+        const ratio = nativeRate / targetRate;   // e.g. 3.0
 
         processor.onaudioprocess = (e) => {
             if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -385,8 +385,8 @@ async function startRecording() {
             ws.send(output.buffer);
         };
 
-        window._micStream    = stream;
-        window._processor    = processor;
+        window._micStream = stream;
+        window._processor = processor;
 
         // Set state BEFORE starting animation loop
         isRecording = true;
@@ -440,15 +440,15 @@ micBtn.addEventListener('click', async () => {
 exportTxtBtn.addEventListener('click', () => {
     if (!fullTranscriptText) { alert('No transcript yet.'); return; }
     const blob = new Blob([fullTranscriptText], { type: 'text/plain' });
-    const url  = URL.createObjectURL(blob);
-    const a    = Object.assign(document.createElement('a'), { href: url, download: `ispeak_${Date.now()}.txt` });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: `ispeak_${Date.now()}.txt` });
     a.click();
     URL.revokeObjectURL(url);
 });
 
 // ── View Mode Toggles ─────────────────────────────────────────────────────────
 const viewSingleBtn = document.getElementById('viewSingleBtn');
-const viewSplitBtn  = document.getElementById('viewSplitBtn');
+const viewSplitBtn = document.getElementById('viewSplitBtn');
 
 viewSingleBtn.addEventListener('click', () => {
     transcriptArea.classList.remove('split-view');
@@ -463,7 +463,7 @@ viewSplitBtn.addEventListener('click', () => {
 });
 
 // ── Sidebar toggles ───────────────────────────────────────────────────────────
-toggleLeftBtn.addEventListener('click',  () => appContainer.classList.toggle('hide-left'));
+toggleLeftBtn.addEventListener('click', () => appContainer.classList.toggle('hide-left'));
 toggleRightBtn.addEventListener('click', () => appContainer.classList.toggle('hide-right'));
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
