@@ -77,8 +77,10 @@ from config import (
     ENABLE_TTS, ENVIRONMENT_PRESETS,
     STT_NO_SPEECH_THRESHOLD, VAD_THRESHOLD,
     DEFAULT_DEPARTMENT_ID, SERVER_PUBLIC_KEY_PATH,
-    MAX_PIPELINE_QUEUE,                          # Fix 7: from config, not hardcoded
-    TRANSLATION_WINDOW_SIZE,                     # sliding-window re-translation depth
+    MAX_PIPELINE_QUEUE,
+    TRANSLATION_WINDOW_SIZE,
+    TURN_TAKING_SILENCE_SEC,     # controls language lock + window clear threshold
+    ENABLE_SLIDING_WINDOW,       # master switch for two-pass window translation
 )
 
 from backend.connection_manager import ConnectionManager
@@ -511,7 +513,7 @@ async def websocket_translate(websocket: WebSocket):
                 # ── Turn-Taking Silence Timeout (Auto Language Fix) ──
                 # If there is >2.0s of silence, we assume the speaker finished their turn.
                 # Clear the lock and context so the next speaker's language is cleanly detected.
-                if state.silence_samples >= int(2.0 * SAMPLE_RATE):
+                if state.silence_samples >= int(TURN_TAKING_SILENCE_SEC * SAMPLE_RATE):
                     if state.detected_language_lock or state.stt_context:
                         logger.info("[Pipeline] Turn-taking detected (2.0s silence). Clearing language lock and context.")
                         state.detected_language_lock = ""
@@ -654,7 +656,9 @@ async def _run_pipeline(
             None,
             lambda: router.translate_with_window(
                 current_text=input_text,
-                window=list(state.translation_window),   # snapshot, not a reference
+                # Pass empty window when ENABLE_SLIDING_WINDOW=False to force
+                # single-pass translation (draft only, no Pass 2).
+                window=list(state.translation_window) if ENABLE_SLIDING_WINDOW else [],
                 src_lang=src_lang,
                 target_lang=state.target_lang,
             )

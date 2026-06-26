@@ -25,30 +25,50 @@ import os
 
 # ── Streaming / VAD thresholds ────────────────────────────────────────────────
 SAMPLE_RATE          = 16000
-VAD_SILENCE_SEC      = 0.9    # seconds of silence before utterance fires (increased to prevent chopping Tamil words)
+VAD_SILENCE_SEC      = 0.9    # seconds of silence before utterance fires
 VAD_MIN_SPEECH_SEC   = 0.5    # minimum utterance length to process
-VAD_MAX_SPEECH_SEC   = 7.0   # force-fire after this many seconds of continuous speech
+VAD_MAX_SPEECH_SEC   = 7.0    # force-fire after this many seconds of continuous speech
 VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
+
+# ── Turn-taking silence threshold ─────────────────────────────────────────────
+# This is SEPARATE from VAD_SILENCE_SEC which controls when an utterance fires.
+# TURN_TAKING_SILENCE_SEC controls when we assume the *speaker has changed*:
+#   - language lock is cleared (next speaker's language re-detected cleanly)
+#   - translation window is cleared (no cross-speaker context bleed)
+# Must be longer than VAD_SILENCE_SEC so it only triggers between turns,
+# not between normal sentence pauses within a single speaker's turn.
+TURN_TAKING_SILENCE_SEC = 2.0
 
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95
 STT_LANG_CONFIDENCE_FLOOR  = 0.70
-STT_BEAM_SIZE              = 2   # primary model (English detection)
-STT_BEAM_SIZE_TAMIL        = 1   # Tamil fine-tune — greedy is sufficient
+# NOTE: STT_BEAM_SIZE / STT_BEAM_SIZE_TAMIL were removed.
+# Beam size is controlled inside STTService directly (the Tamil fine-tune
+# uses greedy decoding internally). Exposing them here was misleading because
+# main.py and RouterService never imported or passed them.
 
 # ── Pipeline flags ────────────────────────────────────────────────────────────
 ENABLE_TTS = False
+
+# ── Sliding-window translation ────────────────────────────────────────────────
+# ENABLE_SLIDING_WINDOW: set to False to disable the two-pass window entirely.
+#   Useful for debugging when you want to confirm whether a translation issue
+#   is caused by the window extraction logic or the model itself.
+#   When False, every utterance uses a single-pass translation (draft only).
+ENABLE_SLIDING_WINDOW = True
+
+# TRANSLATION_WINDOW_SIZE: how many chunks to keep in context.
+#   2 = keep 1 previous chunk + current chunk = 2-chunk window.
+#   Increase to 3 for longer-context topics (+~100ms latency per extra chunk).
+#   WARNING: do not exceed 3 — IndicTrans2's decoder saturates around 256 tokens
+#   and produces repetition artifacts on very long combined inputs.
+TRANSLATION_WINDOW_SIZE = 2
 
 # ── Concurrency ───────────────────────────────────────────────────────────────
 # Maximum pipeline tasks that can queue per WebSocket connection.
 # Tune this down (1) to reduce GPU pressure, up (3) to improve throughput
 # when sentences arrive faster than they can be processed.
 MAX_PIPELINE_QUEUE = 2
-
-# ── Sliding-window translation ────────────────────────────────────────────
-# 2 = keep 1 previous chunk + current chunk = 2-chunk window.
-# Increase to 3 for longer-context topics, but +100ms latency per extra chunk.
-TRANSLATION_WINDOW_SIZE = 2
 
 # ── Environment Presets ───────────────────────────────────────────────────────
 ENVIRONMENT_PRESETS = {

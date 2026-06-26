@@ -54,7 +54,11 @@ def _is_hallucination(text: str) -> bool:
     return any(r.match(t) for r in _HALLUCINATION_RE)
 
 
-from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, STT_BEAM_SIZE, STT_BEAM_SIZE_TAMIL
+from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR
+
+# Default beam sizes for transcription
+STT_BEAM_SIZE = 2        # primary model (English detection)
+STT_BEAM_SIZE_TAMIL = 1  # Tamil fine-tune (greedy is sufficient)
 
 class STTService:
     """

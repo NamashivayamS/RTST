@@ -394,7 +394,11 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 canvas#waveform {
     display: block;
-    width: 380px;
+    /* Use a max-width so the canvas grows naturally with the dock
+       centre column when a sidebar is hidden, but never gets so wide
+       it looks wrong on large screens.                              */
+    width: 100%;
+    max-width: 480px;
     height: 56px;
 }
 

@@ -175,6 +175,9 @@ function connectWebSocket() {
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.host || 'localhost:8000';
+    // ⚠️  DEMO ONLY — This token is visible to anyone who opens DevTools.
+    // Before production: replace with a short-lived token fetched from
+    // GET /api/session-token (server generates it per page load, not hardcoded).
     const TOKEN = "2ff2ad074c8dfe1fb67948e1d49d9f2687f4b28439b210a443688c95427da087";
     const wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
 
@@ -212,8 +215,15 @@ function connectWebSocket() {
         }
         if (dashWsText) dashWsText.innerText = 'Disconnected';
         if (isRecording) stopRecording();
+        // Auto-reconnect after 3 seconds so a server restart doesn't
+        // require a manual page refresh.
+        setTimeout(connectWebSocket, 3000);
     };
-    ws.onerror = (e) => console.error('[WS Error]', e);
+    ws.onerror = (e) => {
+        console.error('[WS Error]', e);
+        // onerror is always followed by onclose, so the reconnect
+        // timer above will fire — no separate retry needed here.
+    };
 }
 
 function sendConfig() {
@@ -236,13 +246,14 @@ envSelect.addEventListener('change', sendConfig);
 function handleSubtitle(data) {
     if (emptyState) emptyState.style.display = 'none';
 
-    if (!currentLiveCard || currentLiveCard.dataset.uttId !== data.utterance_id) {
+    if (!currentLiveCard || currentLiveCard.dataset.utteranceId !== data.utterance_id) {
         if (currentLiveCard) currentLiveCard.classList.remove('live-card');
 
         currentLiveCard = document.createElement('div');
         currentLiveCard.className = 't-card live-card';
-        currentLiveCard.dataset.uttId = data.utterance_id;
-        currentLiveCard.dataset.utteranceId = data.utterance_id || '';  // for subtitle_update lookup
+        // data-utterance-id is the single ID used by handleSubtitleUpdate
+        // to locate this card. No second copy needed.
+        currentLiveCard.dataset.utteranceId = data.utterance_id || '';
 
         const now = new Date();
         const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()]

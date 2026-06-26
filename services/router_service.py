@@ -51,10 +51,10 @@ class RouterService:
     def __init__(self):
         print("RouterService: Initialising all services in main thread...")
 
-        # NOTE:
-        # Global cancellation token.
-        # Valid only for single-user architecture.
-        self.cancel_event = threading.Event()
+        # NOTE: There is no shared cancel_event on RouterService.
+        # Cancellation is handled per-connection via state.cancel_event in main.py.
+        # The TTS worker does not need a cancel check here because main.py drains
+        # and discards the audio queue in the WebSocket finally block.
 
         self.request_counter = itertools.count(1)
 
@@ -120,9 +120,6 @@ class RouterService:
                 break
 
             try:
-                if self.cancel_event.is_set():
-                    print("[TTS Worker] Client disconnected. Cancelling.")
-                    continue
 
                 chunk_text   = payload["text"]
                 chunk_index  = payload["chunk_index"]
@@ -601,7 +598,10 @@ class RouterService:
 
                 # Use 2× max_new_tokens for the combined pass to prevent
                 # the model from truncating before it reaches the current chunk.
-                combined_max_tokens = 96 * (1 + len(window))
+                # Cap at 256: IndicTrans2's decoder produces repetition artifacts
+                # beyond ~256 output tokens. With TRANSLATION_WINDOW_SIZE=2 this
+                # is 192 (fine). At size=3 it would be 288 (unsafe) → cap to 256.
+                combined_max_tokens = min(256, 96 * (1 + len(window)))
                 accurate_combined = self.translation_service.translate(
                     combined, src_indic, tgt_indic,
                     max_new_tokens=combined_max_tokens,
