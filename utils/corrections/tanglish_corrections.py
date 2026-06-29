@@ -9,6 +9,22 @@ TANGLISH_CORRECTIONS = {
     "வேட்டி": "Dhoti",
     "சட்டு": "Shirt",
     "சட்ட": "Shirt",
+    "நாய்ஸ்": "noise",
+    "நாயிஸ்": "noise",
+    "தோசை": "dosa",
+    "இட்லி": "idli",
+    "பிரியாணி": "biryani",
+    "பில்டர்": "filter",
+    "போண்டா": "bondai",
+    "வேஷ்டி": "Veshti",
+    "சாம்ராஜ்": "Ramraj",
+    "ராம்ராஜ்": "Ramraj",
+    "ராம்ராஜின்": "Ramraj",
+    "ராம்ராஜை": "Ramraj",
+    "ராம்ராஜின்": "Ramraj",
+    "ராம்ராஜின்": "Ramraj",
+    "ராம்ராஜின்": "Ramraj",
+
     
     # --- NEW from Ramraj Cotton interview ---
     "வேட்டித்": "Dhoti",

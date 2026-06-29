@@ -337,12 +337,16 @@ class ConnectionState:
         self.source_lang       = ""
         self.detected_language_lock = ""
         self.language_divergence_count = 0
-        self.stt_context       = (
+        self._stt_domain_seed = (
             "இராம்ராஜ் காட்டன் திருப்பூர் வேட்டி சட்டை நெசவு தொழில் ஏற்றுமதி "
-            "Ramraj Cotton Tirupur veshti shirt weaving export quality"
+            "நாகராஜன் கொங்கு தமிழ் அவிநாசி கலாச்சாரம் பிசினஸ் "
+            "Ramraj Cotton Tirupur veshti shirt weaving export quality "
+            "Nagarajan Kongu Tamil Avinashi business culture brand"
         )
+        self.stt_context       = self._stt_domain_seed
         self.meeting_id        = None   # set at connect time, not lazily
         self.cancel_event      = threading.Event()
+        self.turn_taking_fired = False
 
         # ── Sliding-window translation context ────────────────────────────
         # Stores the last TRANSLATION_WINDOW_SIZE-1 corrected source texts.
@@ -492,6 +496,7 @@ async def websocket_translate(websocket: WebSocket):
                 has_speech = False
 
             if has_speech:
+                state.turn_taking_fired = False  # reset when speech resumes
                 if not state.was_speaking:
                     state.mark_utterance_start()
                     state.was_speaking = True
@@ -514,14 +519,23 @@ async def websocket_translate(websocket: WebSocket):
                 # If there is >2.0s of silence, we assume the speaker finished their turn.
                 # Clear the lock and context so the next speaker's language is cleanly detected.
                 if state.silence_samples >= int(TURN_TAKING_SILENCE_SEC * SAMPLE_RATE):
-                    if state.detected_language_lock or state.stt_context:
-                        logger.info("[Pipeline] Turn-taking detected (2.0s silence). Clearing language lock and context.")
-                        state.detected_language_lock = ""
-                        state.stt_context = ""
-                        state.language_divergence_count = 0
-                    if state.translation_window:
-                        logger.info("[Window] Clearing translation window on turn-taking timeout.")
-                        state.translation_window = []
+                    if not state.turn_taking_fired:
+                        state.turn_taking_fired = True
+                        if state.detected_language_lock or state.stt_context:
+                            logger.info("[Pipeline] Turn-taking detected (2.0s silence). Resetting context.")
+                            # Only clear the language lock if the session is truly multilingual.
+                            # In a monolingual Tamil session, preserve the lock so every post-silence
+                            # utterance still routes directly to the fine-tuned Tamil model.
+                            if state.detected_language_lock == "ta" and state.source_lang == "":
+                                # Keep the Tamil lock — don't force utterance 1 of each turn through generic medium
+                                pass
+                            else:
+                                state.detected_language_lock = ""
+                            state.stt_context = state._stt_domain_seed
+                            state.language_divergence_count = 0
+                        if state.translation_window:
+                            logger.info("[Window] Clearing translation window on turn-taking timeout.")
+                            state.translation_window = []
 
                 if state.was_speaking and state.silence_samples >= state.silence_samples_limit:
                     state.was_speaking = False
@@ -633,7 +647,7 @@ async def _run_pipeline(
         # ── Update STT context (last ~5 words for Whisper prompt) ──────────────
         words = result.get("raw_text", "").split()
         if words:
-            state.stt_context = " ".join(words[-5:])
+            state.stt_context = state._stt_domain_seed + " " + " ".join(words[-5:])
 
         # ── Step 2: Sliding-window two-pass translation ────────────────────────
         #
@@ -675,9 +689,16 @@ async def _run_pipeline(
         accurate_refined = router.refinement_service.refine(accurate_text, tgt_lang=tgt_indic)
 
         # Append current chunk to window; keep only last (TRANSLATION_WINDOW_SIZE - 1) entries
-        if input_text.strip():
+        lang_prob   = result.get("language_prob", 0.0)
+        avg_logprob = result.get("avg_logprob", -1.0)
+        if input_text.strip() and lang_prob >= 0.80 and avg_logprob >= -1.0:
             state.translation_window.append(input_text)
             state.translation_window = state.translation_window[-(TRANSLATION_WINDOW_SIZE - 1):]
+        else:
+            pl_logger.info(
+                "[Window] Skipping utterance from window (prob=%.2f, logprob=%.2f)",
+                lang_prob, avg_logprob
+            )
 
         total_time = result.get("stt_time", 0) + trans_time
 

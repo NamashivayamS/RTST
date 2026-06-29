@@ -426,6 +426,7 @@ class RouterService:
                 "stt_time": stt_time,
                 "total_time": total_time,
                 "language_prob": stt_result.get("language_prob", 0.0),
+                "avg_logprob": stt_result.get("avg_logprob", -1.0),
             }
 
         
@@ -708,7 +709,7 @@ class RouterService:
     def _empty_result() -> dict:
         return {
             "raw_text": "", "cleaned_text": "", "punctuated_text": "",
-            "src_lang": "", "language_prob": 0.0,
+            "src_lang": "", "language_prob": 0.0, "avg_logprob": -1.0,
         }
 
 

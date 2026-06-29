@@ -65,7 +65,7 @@ class STTService:
     Speech-to-Text service using Faster-Whisper with dual-model routing.
 
     Architecture:
-    - Primary model: large-v3-turbo (English + language detection + multilingual fallback)
+    - Primary model: medium (English + language detection + multilingual fallback)
     - Tamil model: vasista22/whisper-tamil-medium (specialized Tamil fine-tune)
 
     Flow:
@@ -222,6 +222,7 @@ class STTService:
                 )
                 segments = retry_segments
                 info = retry_info
+                quality = retry_quality
             else:
                 print(
                     f"[STT] Retry did not improve "
@@ -263,8 +264,12 @@ class STTService:
             print(f"[STT] Hallucination filtered: '{full_text}'")
             return self._empty(full_text, info, silence=True)
 
-        # ── Language reclassification ──────────────────────────────────────
-        detected_lang = info.language
+        # Don't overwrite detected_lang if Tamil-first bypass was used —
+        # the fine-tuned model's info.language is unreliable (can return 'ml', 'kn').
+        if force_language != "ta":
+            detected_lang = info.language
+        # else: keep detected_lang = "ta" as set by the bypass
+        
         lang_prob     = info.language_probability
         
         print(
@@ -356,6 +361,7 @@ class STTService:
             "is_tanglish":     is_tanglish,
             "indictrans_lang": indictrans_lang,
             "segments":        segments,
+            "avg_logprob":     quality.get("avg_logprob", -1.0),
         }
 
     def transcribe_to_text(self, audio_input, language: str | None = None) -> str:
@@ -466,6 +472,7 @@ class STTService:
             "is_tanglish":     False,
             "indictrans_lang": None,
             "segments":        [],
+            "avg_logprob":     -1.0,
         }
 
 

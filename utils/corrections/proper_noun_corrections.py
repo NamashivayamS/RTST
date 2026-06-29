@@ -12,6 +12,8 @@ PROPER_NOUN_CORRECTIONS = {
     "Kureshi": "Accuracy",
     "MEC": "MSc",
     "Iruppur":"Tiruppur",
+    "what i am providing is": "Reporting for you, I am",
+    "i am providing": "reporting",
 
     # ── People Names ──────────────────────────────────────────────────────
     "Namah Shivayam": "Namashivayam",
