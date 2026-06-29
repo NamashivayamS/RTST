@@ -39,6 +39,8 @@ HALLUCINATION_PATTERNS = [
     r"^\s*[a-zA-Z]{1,4}\s*$",         # 1-4 Latin chars only
     r"^\s*\.+\s*$",                # ellipsis or multiple periods
     r"(?i).*namashivayam.*ramraj.*tirupur.*", # Initial prompt leakage
+    r"(?i).*avinashi.*business.*culture.*brand.*", # New prompt leakage
+    r"(?i).*ramraj.*cotton.*tirupur.*veshti.*",    # New prompt leakage
     r"(?i).*hello.*how are you.*",
     r"(?i).*வணக்கம்.*எப்படி இருக்கிறீர்கள்.*",
 ]
@@ -324,15 +326,15 @@ class STTService:
 
         # ── Tanglish / False-Tamil detection ───────────────────────────────
         is_tanglish = False
-        if detected_lang == "ta":
+        if detected_lang != "en":
             latin_ratio = self._get_latin_ratio(full_text)
             
             # If the text is almost entirely English (e.g. >90%), Whisper's LID 
             # made a mistake (biased by our prompt). Force it to English.
             if latin_ratio > 0.90:
-                print(f"[STT] Reclassifying 'ta' → 'en' (Transcription is 100% English)")
+                print(f"[STT] Reclassifying '{detected_lang}' → 'en' (Transcription is 100% English)")
                 detected_lang = "en"
-            elif latin_ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD:
+            elif detected_lang == "ta" and latin_ratio >= self.TANGLISH_ENGLISH_RATIO_THRESHOLD:
                 is_tanglish = True
                 print(f"[STT] Tanglish detected in: '{full_text}'")
         elif detected_lang == "en":
