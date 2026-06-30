@@ -557,3 +557,27 @@ canvas#waveform {
     0%   { opacity: 0.4; }
     100% { opacity: 1; }
 }
+
+/* ── Transcript Card Performance Metrics ────────────────────────────────── */
+.t-metrics {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-top: 1px solid rgba(51, 65, 85, 0.25);
+    padding-top: 10px;
+}
+.t-metrics i {
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.t-metrics .metric-item strong {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+.t-metrics .metric-separator {
+    color: var(--border-subtle);
+    opacity: 0.4;
+}

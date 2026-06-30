@@ -728,6 +728,9 @@ async def _run_pipeline(
             "tgt_lang":     tgt_indic,
             "confidence":   result.get("language_prob"),
             "is_draft":     window_used,   # True only if an update will follow
+            "stt_time_ms":  int(result.get("stt_time", 0) * 1000),
+            "trans_time_ms": int(trans_time * 1000),
+            "total_time_ms": int(total_time * 1000),
         })
 
         # ── Send accurate update if the window improved the translation ─────────
@@ -739,6 +742,8 @@ async def _run_pipeline(
                 "source_text":  input_text,
                 "src_lang":     src_lang,
                 "tgt_lang":     tgt_indic,
+                "trans_time_ms": int(trans_time * 1000),
+                "total_time_ms": int((result.get("stt_time", 0) + trans_time) * 1000),
             })
             pl_logger.info("[Window] subtitle_update sent for %s", utt_id)
 

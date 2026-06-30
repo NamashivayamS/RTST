@@ -269,12 +269,22 @@ function handleSubtitle(data) {
                 </div>
                 <div class="t-source source-text">${data.source_text || '...'}</div>
                 <div class="t-target target-text">${data.text || '...'}</div>
+                <div class="t-metrics">
+                    <span class="metric-item"><i class="fa-solid fa-microphone"></i> ASR: <strong class="metric-asr">${data.stt_time_ms || 0}ms</strong></span>
+                    <span class="metric-separator">|</span>
+                    <span class="metric-item"><i class="fa-solid fa-language"></i> NMT: <strong class="metric-nmt">${data.trans_time_ms || 0}ms</strong></span>
+                    <span class="metric-separator">|</span>
+                    <span class="metric-item"><i class="fa-solid fa-bolt"></i> Total: <strong class="metric-total">${data.total_time_ms || 0}ms</strong></span>
+                </div>
             </div>`;
         transcriptArea.appendChild(currentLiveCard);
     } else {
         currentLiveCard.querySelector('.source-text').innerText = data.source_text || '...';
         currentLiveCard.querySelector('.target-text').innerText = data.text || '...';
         if (data.src_lang) currentLiveCard.querySelector('.lang-tag').innerText = data.src_lang;
+        if (data.stt_time_ms) currentLiveCard.querySelector('.metric-asr').innerText = data.stt_time_ms + 'ms';
+        if (data.trans_time_ms) currentLiveCard.querySelector('.metric-nmt').innerText = data.trans_time_ms + 'ms';
+        if (data.total_time_ms) currentLiveCard.querySelector('.metric-total').innerText = data.total_time_ms + 'ms';
     }
 
     if (autoScrollToggle.checked) transcriptArea.scrollTop = transcriptArea.scrollHeight;
@@ -305,6 +315,12 @@ function handleSubtitleUpdate(data) {
         () => textEl.classList.remove('text-updating'),
         { once: true }
     );
+
+    // Update the latency metrics
+    const nmtEl = card.querySelector('.metric-nmt');
+    const totalEl = card.querySelector('.metric-total');
+    if (nmtEl && data.trans_time_ms) nmtEl.innerText = data.trans_time_ms + 'ms';
+    if (totalEl && data.total_time_ms) totalEl.innerText = data.total_time_ms + 'ms';
 }
 
 function handleDone(data) {
