@@ -55,7 +55,7 @@ ENABLE_TTS = False
 #   Useful for debugging when you want to confirm whether a translation issue
 #   is caused by the window extraction logic or the model itself.
 #   When False, every utterance uses a single-pass translation (draft only).
-ENABLE_SLIDING_WINDOW = False
+ENABLE_SLIDING_WINDOW = True
 
 # TRANSLATION_WINDOW_SIZE: how many chunks to keep in context.
 #   2 = keep 1 previous chunk + current chunk = 2-chunk window.
