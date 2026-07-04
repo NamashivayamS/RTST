@@ -37,7 +37,7 @@ print("\n=== ENROLLMENT ===")
 for name, clips in SPEAKERS.items():
     audio, sr = load_audio(clips["enroll"])
     print(f"Enrolling {name} ({len(audio)/sr:.1f}s)...")
-    service.enroll_speaker(name, audio, sample_rate=sr)
+    service.enroll_speaker(name, audio, sample_rate=sr, meeting_id="test_meeting")
 
 # ── Cross-check every test clip against every enrolled profile ─────
 print("\n=== CROSS-CHECK MATRIX ===")
@@ -50,7 +50,7 @@ results_summary = []
 
 for test_name, clips in SPEAKERS.items():
     audio, sr = load_audio(clips["test"])
-    result = service.identify_speaker(audio, sample_rate=sr, threshold=THRESHOLD)
+    result = service.identify_speaker(audio, sample_rate=sr, meeting_id="test_meeting", threshold=THRESHOLD)
     scores = result["scores"]
 
     print(f"{test_name:<15}", end="")
@@ -66,9 +66,9 @@ for test_name, clips in SPEAKERS.items():
 print("\n=== VERDICT ===")
 all_correct = True
 for test_name, matched, correct in results_summary:
-    status = "✅ CORRECT" if correct else "❌ WRONG"
-    print(f"{test_name}'s clip → matched as '{matched}'  {status}")
+    status = "CORRECT" if correct else "WRONG"
+    print(f"{test_name}'s clip -> matched as '{matched}'  [{status}]")
     if not correct:
         all_correct = False
 
-print(f"\n{'All matches correct — threshold holds.' if all_correct else 'MISMATCH FOUND — threshold or clips need review.'}")
+print(f"\n{'All matches correct -- threshold holds.' if all_correct else 'MISMATCH FOUND -- threshold or clips need review.'}")

@@ -583,6 +583,8 @@ async def websocket_translate(websocket: WebSocket):
         logger.exception("[WS] Unexpected error in receive loop.")
     finally:
         state.cancel_event.set()
+        if state.meeting_id and router:
+            router.speaker_id_service.clear_meeting(state.meeting_id)
         manager.disconnect(websocket)
 
 
@@ -643,6 +645,39 @@ async def _run_pipeline(
             return
 
         src_lang = result.get("src_lang", "")
+
+        # ── Speaker ID: auto-enroll from self-intro, else identify ─────────────
+        speaker_label = "unknown"
+        try:
+            speaker_text = result.get("cleaned_text", result.get("raw_text", ""))
+            intro_name = router.speaker_id_service.extract_name_from_text(speaker_text)
+            pl_logger.info(
+                "[SpeakerID] text='%s' → extracted='%s'",
+                speaker_text[:80], intro_name
+            )
+            if intro_name:
+                await loop.run_in_executor(
+                    None,
+                    lambda: router.speaker_id_service.enroll_speaker(
+                        intro_name, audio, SAMPLE_RATE, state.meeting_id
+                    )
+                )
+                speaker_label = intro_name
+                pl_logger.info("[SpeakerID] Enrolled '%s' for meeting %s", intro_name, state.meeting_id)
+            else:
+                id_result = await loop.run_in_executor(
+                    None,
+                    lambda: router.speaker_id_service.identify_speaker(
+                        audio, SAMPLE_RATE, state.meeting_id
+                    )
+                )
+                speaker_label = id_result["speaker_id"]
+                pl_logger.info(
+                    "[SpeakerID] Identified as '%s' (sim=%.3f)",
+                    speaker_label, id_result.get("similarity", 0.0)
+                )
+        except Exception:
+            pl_logger.exception("[SpeakerID] Failed — continuing without speaker label.")
 
         # ── Language Switch Fallback Drop ──
         if state.detected_language_lock:
@@ -749,6 +784,7 @@ async def _run_pipeline(
             "source_text":  input_text,
             "src_lang":     src_lang,
             "tgt_lang":     tgt_indic,
+            "speaker":      speaker_label,
             "confidence":   result.get("language_prob"),
             "is_draft":     window_used,   # True only if an update will follow
             "stt_time_ms":  int(result.get("stt_time", 0) * 1000),
@@ -765,6 +801,7 @@ async def _run_pipeline(
                 "source_text":  input_text,
                 "src_lang":     src_lang,
                 "tgt_lang":     tgt_indic,
+                "speaker":      speaker_label,
                 "trans_time_ms": int(trans_time * 1000),
                 "total_time_ms": int((result.get("stt_time", 0) + trans_time) * 1000),
             })
@@ -788,6 +825,7 @@ async def _run_pipeline(
                         source_language=src_lang,
                         target_language=tgt_indic,
                         total_latency_ms=int(total_time * 1000),
+                        speaker_label=speaker_label,
                     )
                 except Exception:
                     logging.getLogger("ispeak.db").error(

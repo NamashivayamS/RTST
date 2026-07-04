@@ -205,7 +205,7 @@ function connectWebSocket() {
         else if (data.type === 'done') handleDone(data);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
         wsStatusDot.className = 'indicator-dot offline';
         wsStatusText.innerText = 'Disconnected';
         if (dashWsDot) {
@@ -214,8 +214,19 @@ function connectWebSocket() {
         }
         if (dashWsText) dashWsText.innerText = 'Disconnected';
         if (isRecording) stopRecording();
-        // Auto-reconnect after 3 seconds so a server restart doesn't
-        // require a manual page refresh.
+
+        // 4003 = auth rejected (stale token after server restart).
+        // Retrying with the same cached token is futile — reload the page
+        // to get the fresh token from the server-rendered HTML.
+        if (event.code === 4003) {
+            console.warn('[WS] Auth rejected (token expired). Reloading page to get fresh token...');
+            wsStatusText.innerText = 'Token expired — reloading...';
+            setTimeout(() => location.reload(), 1000);
+            return;
+        }
+
+        // Normal disconnect (network blip, server restart in progress) —
+        // auto-reconnect after 3 seconds.
         setTimeout(connectWebSocket, 3000);
     };
     ws.onerror = (e) => {
@@ -258,12 +269,25 @@ function handleSubtitle(data) {
         const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()]
             .map(n => String(n).padStart(2, '0')).join(':');
 
+        // Speaker label comes from the backend's speaker ID service.
+        // "unknown" means either nobody has self-introduced yet in this
+        // meeting, or this utterance didn't clear the match threshold.
+        const speakerName = data.speaker && data.speaker !== 'unknown'
+            ? data.speaker
+            : 'Unknown Speaker';
+        // Badge initial: first letter of the real name, or "?" for unknown.
+        const speakerInitial = (data.speaker && data.speaker !== 'unknown')
+            ? data.speaker.charAt(0).toUpperCase()
+            : '?';
+
+        currentLiveCard.dataset.speaker = speakerName;
+
         currentLiveCard.innerHTML = `
             <div class="t-time">${timeStr}</div>
             <div class="t-content">
                 <div class="t-speaker">
-                    <div class="spk-badge">S1</div>
-                    <span class="spk-name">Speaker 1</span>
+                    <div class="spk-badge">${speakerInitial}</div>
+                    <span class="spk-name">${speakerName}</span>
                     <span class="lang-tag">${data.src_lang || 'Auto'}</span>
                 </div>
                 <div class="t-source source-text">${data.source_text || '...'}</div>
@@ -329,7 +353,8 @@ function handleDone(data) {
     const srcText = currentLiveCard.querySelector('.source-text').innerText;
     const tgtText = currentLiveCard.querySelector('.target-text').innerText;
     const timeStr = currentLiveCard.querySelector('.t-time').innerText;
-    fullTranscriptText += `[${timeStr}] Speaker 1\nSource: ${srcText}\nTranslated: ${tgtText}\n\n`;
+    const speakerName = currentLiveCard.dataset.speaker || 'Unknown Speaker';
+    fullTranscriptText += `[${timeStr}] ${speakerName}\nSource: ${srcText}\nTranslated: ${tgtText}\n\n`;
 
     const words = srcText.split(/\s+/).filter(w => w.length > 0).length;
     totalWords += words;

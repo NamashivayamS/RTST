@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS utterances (
     source_text TEXT NOT NULL,
     translated_text TEXT NOT NULL,
     total_latency_ms INTEGER NOT NULL,
+    speaker_label VARCHAR(255) NOT NULL DEFAULT 'unknown',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,3 +37,7 @@ CREATE TABLE IF NOT EXISTS utterances (
 INSERT INTO departments (id, name)
 VALUES ('b6f8468a-477c-4045-a696-c402afae99a5', 'Default Department')
 ON CONFLICT (id) DO NOTHING;
+
+-- 5. Add speaker_label to Utterances (speaker identification feature)
+ALTER TABLE utterances
+ADD COLUMN IF NOT EXISTS speaker_label VARCHAR(255) NOT NULL DEFAULT 'unknown';

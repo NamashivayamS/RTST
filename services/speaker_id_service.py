@@ -1,128 +1,163 @@
-import os
+import re
+import threading
 import torch
 import numpy as np
-import torchaudio
 import torchaudio.transforms as T
 from speechbrain.inference.speaker import EncoderClassifier
+
+# Self-introduction patterns — English + common Tamil/Tanglish phrasings.
+# Conservative on purpose: a missed name just means no auto-enrollment for
+# that utterance (safe — falls back to identify_speaker), but a wrong name
+# baked into meeting minutes is worse than a missed one.
+_NAME_PATTERNS = [
+    r"\bi'?m\s+([A-Za-z]+)",
+    r"\bi am\s+([A-Za-z]+)",
+    r"\bmy name is\s+([A-Za-z]+)",
+    r"\bmyself\s+([A-Za-z]+)",
+    r"\bthis is\s+([A-Za-z]+)\s+speaking",
+    # Tamil: only the explicit "என் பெயர்" (my name is) pattern is safe.
+    # "நான்" (I) is too common — it appears in nearly every Tamil sentence
+    # and would enroll random following words as fake speakers.
+    r"என்\s*பெயர்\s*([A-Za-z\u0B80-\u0BFF]+)",
+]
+_NAME_RE = [re.compile(p, re.IGNORECASE) for p in _NAME_PATTERNS]
+
+# Words that commonly follow "I'm" / "I am" / "myself" but are NOT names —
+# without this guard, ordinary sentences like "I'm sure this will work" or
+# "I'm happy to help" would auto-enroll a fake speaker named "Sure" or "Happy".
+# Same defensive-stopword pattern as correction_service.py's _EXCLUSIONS.
+_NON_NAME_WORDS = {
+    "sure", "happy", "sorry", "going", "trying", "done", "fine", "glad",
+    "okay", "ok", "ready", "not", "still", "also", "just", "here", "there",
+    "back", "afraid", "confused", "excited", "looking", "thinking",
+    "wondering", "calling", "asking", "working", "leaving", "coming",
+    "speaking", "talking", "saying", "sending", "sharing", "presenting",
+    "hoping", "planning", "starting", "finishing", "waiting", "listening",
+    "checking", "assuming", "guessing", "worried", "concerned", "curious",
+    "interested", "certain", "positive", "confident", "aware", "on", "off",
+}
+
 
 class SpeakerIDService:
     """
     Speaker Identification and Verification Service using SpeechBrain's ECAPA-TDNN.
-    Extracts speaker embeddings from audio signals and performs similarity matching.
+
+    IMPORTANT — meeting-scoped, not global:
+    RouterService is a single shared instance across all WebSocket connections.
+    Enrolled voiceprints are therefore stored per `meeting_id`, not in one flat
+    dict — otherwise two simultaneous meetings would leak speaker identities
+    into each other. Every public method takes `meeting_id` as a required arg.
+
+    Call clear_meeting(meeting_id) when a meeting/connection ends, or enrolled
+    profiles will accumulate in memory indefinitely across the server's uptime.
     """
 
     def __init__(self, model_name: str = "speechbrain/spkrec-ecapa-voxceleb", device: str = None):
-        if device is None:
-            self.device = "cpu"
-        else:
-            self.device = device
-            
+        # Default is CPU, not auto-detect — keeps GPU VRAM free for
+        # Whisper-Tamil + IndicTrans2. Pass device="cuda" explicitly if you
+        # ever want to benchmark GPU placement.
+        self.device = device if device is not None else "cpu"
+
         print(f"SpeakerIDService: Loading model '{model_name}' on {self.device}...")
-        
-        # Load pre-trained ECAPA-TDNN speaker encoder model
         self.classifier = EncoderClassifier.from_hparams(
             source=model_name,
             run_opts={"device": self.device}
         )
         print("SpeakerIDService: Model loaded successfully.")
-        
-        # In-memory speaker profile store mapping: speaker_id -> embedding (numpy array)
-        self.profiles = {}
+
+        # meeting_id -> {speaker_name: normalized embedding}
+        self.meeting_profiles: dict[str, dict[str, np.ndarray]] = {}
+
+        # Serializes all profile dict reads/writes. Needed because multiple
+        # _run_pipeline tasks (even within the same meeting) can run
+        # concurrently via run_in_executor — without this, two near-simultaneous
+        # enrollments for the same name can race on the read-modify-write
+        # averaging step and silently corrupt the stored embedding.
+        # Mirrors the existing stt_lock/translation_lock pattern in RouterService.
+        self.lock = threading.Lock()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Embedding extraction
+    # ──────────────────────────────────────────────────────────────────
 
     def get_embedding(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
-        """
-        Extract speaker embedding (192-dimensional vector) from audio chunk.
-        
-        Args:
-            audio: 1-D float32 numpy array.
-            sample_rate: The sample rate of the input audio.
-            
-        Returns:
-            1-D numpy array of size 192 representing the speaker embedding.
-        """
+        """Extract a 192-dim speaker embedding from a mono float32 audio array."""
         if audio.ndim != 1:
             raise ValueError(f"Expected 1-D audio array, got shape {audio.shape}")
-
         if len(audio) == 0:
             raise ValueError("Input audio is empty")
 
-        # Convert numpy array to torch tensor
         audio_tensor = torch.tensor(audio, dtype=torch.float32)
 
-        # Resample to 16000 Hz if necessary (SpeechBrain models expect 16kHz)
         if sample_rate != 16000:
             resampler = T.Resample(orig_freq=sample_rate, new_freq=16000)
             audio_tensor = resampler(audio_tensor)
 
-        # Ensure signal is 2D: [batch, time]
         if audio_tensor.ndim == 1:
             audio_tensor = audio_tensor.unsqueeze(0)
-
-        # Send tensor to the appropriate device
         audio_tensor = audio_tensor.to(self.device)
 
         with torch.no_grad():
-            # Get embeddings from the classifier
             embeddings = self.classifier.encode_batch(audio_tensor)
-            # Squeeze to get 1D vector and convert to numpy on CPU
             emb_numpy = embeddings.squeeze().cpu().numpy()
 
         return emb_numpy
 
-    def enroll_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int = 16000) -> bool:
+    # ──────────────────────────────────────────────────────────────────
+    # Meeting-scoped profile management
+    # ──────────────────────────────────────────────────────────────────
+
+    def _get_meeting_profiles(self, meeting_id: str) -> dict[str, np.ndarray]:
+        if meeting_id not in self.meeting_profiles:
+            self.meeting_profiles[meeting_id] = {}
+        return self.meeting_profiles[meeting_id]
+
+    def clear_meeting(self, meeting_id: str):
+        """Call when a meeting/connection ends — frees enrolled voiceprints."""
+        with self.lock:
+            removed = self.meeting_profiles.pop(meeting_id, None)
+        if removed is not None:
+            print(f"SpeakerIDService: Cleared {len(removed)} profile(s) for meeting {meeting_id}.")
+
+    def enroll_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str) -> bool:
         """
-        Extract embedding from the audio and register it for a speaker_id.
-        If the speaker already exists, average the new embedding with the old one
-        to create a more robust speaker profile.
-        
-        Args:
-            speaker_id: A unique string identifier for the speaker.
-            audio: 1-D float32 numpy array.
-            sample_rate: The sample rate of the input audio.
+        Extract embedding and register it for `speaker_id` within `meeting_id`.
+        Repeated enrollments for the same name are averaged for robustness.
         """
         try:
+            # Embedding extraction itself doesn't need the lock (no shared
+            # state touched), but the whole read-modify-write on `profiles`
+            # must be atomic to avoid two concurrent enrollments for the same
+            # name racing on the averaging step.
             new_emb = self.get_embedding(audio, sample_rate)
-            
-            if speaker_id in self.profiles:
-                # Average embeddings for multiple enrollments
-                old_emb = self.profiles[speaker_id]
-                avg_emb = (old_emb + new_emb) / 2.0
-                # Re-normalize to unit length
-                norm = np.linalg.norm(avg_emb)
-                if norm > 0:
-                    self.profiles[speaker_id] = avg_emb / norm
+
+            with self.lock:
+                profiles = self._get_meeting_profiles(meeting_id)
+                if speaker_id in profiles:
+                    old_emb = profiles[speaker_id]
+                    avg_emb = (old_emb + new_emb) / 2.0
+                    norm = np.linalg.norm(avg_emb)
+                    profiles[speaker_id] = avg_emb / norm if norm > 0 else avg_emb
+                    print(f"SpeakerIDService: Updated '{speaker_id}' in meeting {meeting_id} (averaged).")
                 else:
-                    self.profiles[speaker_id] = avg_emb
-                print(f"SpeakerIDService: Updated profile for speaker '{speaker_id}' (averaged embeddings).")
-            else:
-                # Normalize to unit length
-                norm = np.linalg.norm(new_emb)
-                if norm > 0:
-                    self.profiles[speaker_id] = new_emb / norm
-                else:
-                    self.profiles[speaker_id] = new_emb
-                print(f"SpeakerIDService: Enrolled speaker '{speaker_id}' successfully.")
+                    norm = np.linalg.norm(new_emb)
+                    profiles[speaker_id] = new_emb / norm if norm > 0 else new_emb
+                    print(f"SpeakerIDService: Enrolled '{speaker_id}' in meeting {meeting_id}.")
             return True
         except Exception as e:
-            print(f"SpeakerIDService Error: Failed to enroll speaker '{speaker_id}': {e}")
+            print(f"SpeakerIDService Error: Failed to enroll '{speaker_id}': {e}")
             return False
 
-    def remove_speaker(self, speaker_id: str) -> bool:
-        """Remove a speaker profile."""
-        if speaker_id in self.profiles:
-            del self.profiles[speaker_id]
-            print(f"SpeakerIDService: Removed speaker '{speaker_id}'.")
+    def remove_speaker(self, speaker_id: str, meeting_id: str) -> bool:
+        profiles = self.meeting_profiles.get(meeting_id, {})
+        if speaker_id in profiles:
+            del profiles[speaker_id]
+            print(f"SpeakerIDService: Removed '{speaker_id}' from meeting {meeting_id}.")
             return True
         return False
 
-    def clear_profiles(self):
-        """Clear all enrolled speaker profiles."""
-        self.profiles.clear()
-        print("SpeakerIDService: All speaker profiles cleared.")
-
     @staticmethod
     def compute_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Compute cosine similarity between two speaker embeddings."""
         dot_prod = np.dot(emb1, emb2)
         norm1 = np.linalg.norm(emb1)
         norm2 = np.linalg.norm(emb2)
@@ -130,149 +165,61 @@ class SpeakerIDService:
             return 0.0
         return float(dot_prod / (norm1 * norm2))
 
-    def identify_speaker(self, audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.5) -> dict:
+    def identify_speaker(self, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
         """
-        Identify the speaker from the audio segment by comparing it to all enrolled profiles.
-        
-        Args:
-            audio: 1-D float32 numpy array.
-            sample_rate: The sample rate of the input audio.
-            threshold: Cosine similarity threshold for identifying a known speaker.
-            
-        Returns:
-            dict containing:
-                "speaker_id": The matched speaker ID or "unknown" if below threshold.
-                "similarity": The cosine similarity score.
-                "scores": A dict of scores for all enrolled speakers.
+        Identify the speaker by comparing against profiles enrolled in THIS
+        meeting only. Returns speaker_id="unknown" if no enrolled profile
+        clears the threshold — including when nobody has been enrolled yet.
         """
-        if not self.profiles:
+        with self.lock:
+            profiles = dict(self.meeting_profiles.get(meeting_id, {}))  # snapshot
+        if not profiles:
             return {"speaker_id": "unknown", "similarity": 0.0, "scores": {}}
 
         try:
             test_emb = self.get_embedding(audio, sample_rate)
-            
-            scores = {}
-            for spk_id, ref_emb in self.profiles.items():
-                sim = self.compute_similarity(test_emb, ref_emb)
-                scores[spk_id] = sim
+            scores = {spk_id: self.compute_similarity(test_emb, ref_emb)
+                      for spk_id, ref_emb in profiles.items()}
 
-            # Find speaker with maximum similarity
             best_spk = max(scores, key=scores.get)
             best_score = scores[best_spk]
+            matched_spk = best_spk if best_score >= threshold else "unknown"
 
-            if best_score >= threshold:
-                matched_spk = best_spk
-            else:
-                matched_spk = "unknown"
-
-            return {
-                "speaker_id": matched_spk,
-                "similarity": best_score,
-                "scores": scores
-            }
+            return {"speaker_id": matched_spk, "similarity": best_score, "scores": scores}
         except Exception as e:
-            print(f"SpeakerIDService Error: Speaker identification failed: {e}")
+            print(f"SpeakerIDService Error: Identification failed: {e}")
             return {"speaker_id": "unknown", "similarity": 0.0, "scores": {}, "error": str(e)}
 
-    def verify_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.5) -> dict:
-        """
-        Verify whether the speaker of the audio segment matches a specific claimed speaker_id.
-        
-        Args:
-            speaker_id: The claimed speaker ID.
-            audio: 1-D float32 numpy array.
-            sample_rate: The sample rate of the input audio.
-            threshold: Cosine similarity threshold for verification.
-        """
-        if speaker_id not in self.profiles:
-            return {"verified": False, "similarity": 0.0, "error": f"Speaker '{speaker_id}' is not enrolled"}
+    def verify_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
+        with self.lock:
+            profiles = dict(self.meeting_profiles.get(meeting_id, {}))  # snapshot
+        if speaker_id not in profiles:
+            return {"verified": False, "similarity": 0.0, "error": f"'{speaker_id}' not enrolled in this meeting"}
 
         try:
             test_emb = self.get_embedding(audio, sample_rate)
-            ref_emb = self.profiles[speaker_id]
-            sim = self.compute_similarity(test_emb, ref_emb)
-            
-            return {
-                "verified": sim >= threshold,
-                "similarity": sim,
-                "threshold": threshold
-            }
+            sim = self.compute_similarity(test_emb, profiles[speaker_id])
+            return {"verified": sim >= threshold, "similarity": sim, "threshold": threshold}
         except Exception as e:
-            print(f"SpeakerIDService Error: Speaker verification failed: {e}")
+            print(f"SpeakerIDService Error: Verification failed: {e}")
             return {"verified": False, "similarity": 0.0, "error": str(e)}
 
+    # ──────────────────────────────────────────────────────────────────
+    # Name extraction from STT text (drives auto-enrollment)
+    # ──────────────────────────────────────────────────────────────────
 
-# Quick test when run directly
-if __name__ == "__main__":
-    import soundfile as sf
-
-    # 1. Initialize Service
-    service = SpeakerIDService()
-
-    # 2. Find sample WAV file
-    sample_paths = [
-        "tests/audio_samples/ref_cropped.wav",
-        "tests/audio_samples/reference.wav"
-    ]
-    
-    selected_path = None
-    for p in sample_paths:
-        if os.path.exists(p):
-            selected_path = p
-            break
-
-    if selected_path:
-        print(f"\n--- Running tests using file: {selected_path} ---")
-        audio, sr = sf.read(selected_path)
-        print(f"Loaded audio shape: {audio.shape}, Sample rate: {sr}")
-        
-        # If stereo, convert to mono
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-
-        # Convert to float32
-        audio = audio.astype(np.float32)
-
-        # Split the audio into two halves to test verification
-        midpoint = len(audio) // 2
-        first_half = audio[:midpoint]
-        second_half = audio[midpoint:]
-
-        # Test Enrollment
-        print("\n[Test 1] Enrolling speaker 'speaker_A' using first half of the audio...")
-        enroll_ok = service.enroll_speaker("speaker_A", first_half, sample_rate=sr)
-        
-        if enroll_ok:
-            # Test Identification (same speaker, second half)
-            print("\n[Test 2] Identifying speaker of the second half...")
-            result = service.identify_speaker(second_half, sample_rate=sr, threshold=0.25)
-            print(f"Identification Result: {result}")
-
-            # Test Verification
-            print("\n[Test 3] Verifying speaker_A identity on second half...")
-            verify_result = service.verify_speaker("speaker_A", second_half, sample_rate=sr, threshold=0.25)
-            print(f"Verification Result: {verify_result}")
-
-            # Test with dummy/noise array
-            print("\n[Test 4] Identifying a random noise signal (should be unknown)...")
-            noise = np.random.randn(sr * 3).astype(np.float32) * 0.01
-            noise_result = service.identify_speaker(noise, sample_rate=sr, threshold=0.25)
-            print(f"Noise Identification Result: {noise_result}")
-    else:
-        print("\nNo test wav files found. Running quick test with synthetic signals...")
-        # Synthesize simple tone signals
-        t = np.linspace(0, 3, 16000 * 3)
-        signal_A1 = np.sin(2 * np.pi * 440 * t).astype(np.float32)
-        signal_A2 = (np.sin(2 * np.pi * 440 * t) + np.sin(2 * np.pi * 880 * t) * 0.2).astype(np.float32)
-        signal_B = np.sin(2 * np.pi * 1000 * t).astype(np.float32)
-
-        print("\n[Test 1] Enrolling speaker 'tone_A'...")
-        service.enroll_speaker("tone_A", signal_A1, sample_rate=16000)
-
-        print("\n[Test 2] Identifying 'tone_A' variation...")
-        result = service.identify_speaker(signal_A2, sample_rate=16000, threshold=0.20)
-        print(f"Identification Result: {result}")
-
-        print("\n[Test 3] Identifying a completely different tone 'tone_B'...")
-        result_diff = service.identify_speaker(signal_B, sample_rate=16000, threshold=0.20)
-        print(f"Different Tone Identification Result: {result_diff}")
+    @staticmethod
+    def extract_name_from_text(text: str) -> str | None:
+        """
+        Looks for self-introduction patterns in STT output.
+        Returns the extracted name (title-cased) or None if nothing matched.
+        """
+        if not text:
+            return None
+        for pattern in _NAME_RE:
+            match = pattern.search(text)
+            if match:
+                name = match.group(1).strip()
+                if len(name) >= 2 and name.lower() not in _NON_NAME_WORDS:
+                    return name.title()
+        return None

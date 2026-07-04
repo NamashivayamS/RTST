@@ -16,6 +16,7 @@ from config import ENABLE_TTS
 from services.punctuation_service import PunctuationService
 from services.correction_service  import CorrectionService
 from services.refinement_service  import RefinementService
+from services.speaker_id_service  import SpeakerIDService
 
 # ── GPU models ────────────────────────────────────────────────────────────────
 from services.vad_service         import VADService
@@ -61,6 +62,7 @@ class RouterService:
         self.correction_service  = CorrectionService()
         self.punctuation_service = PunctuationService()
         self.refinement_service  = RefinementService()
+        self.speaker_id_service  = SpeakerIDService()
 
         # GPU models
         self.vad_service         = VADService()

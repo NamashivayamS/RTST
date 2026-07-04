@@ -72,6 +72,7 @@ def save_utterance(
     source_language: str,
     target_language: str,
     total_latency_ms: int,
+    speaker_label: str = "unknown",
 ) -> str:
     """
     Inserts one utterance row and returns its UUID.
@@ -91,12 +92,14 @@ def save_utterance(
                 target_language,
                 source_text,
                 translated_text,
-                total_latency_ms
+                total_latency_ms,
+                speaker_label
             )
             VALUES
             (
                 %s,
                 CURRENT_TIMESTAMP,
+                %s,
                 %s,
                 %s,
                 %s,
@@ -112,6 +115,7 @@ def save_utterance(
                 source_text,
                 translated_text,
                 total_latency_ms,
+                speaker_label,
             ),
         )
         utterance_id = cur.fetchone()["id"]
