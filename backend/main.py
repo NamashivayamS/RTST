@@ -46,6 +46,7 @@ import json
 import logging
 import os
 import queue
+import secrets
 import sys
 import time
 import threading
@@ -81,13 +82,14 @@ from config import (
     TRANSLATION_WINDOW_SIZE,
     TURN_TAKING_SILENCE_SEC,     # controls language lock + window clear threshold
     ENABLE_SLIDING_WINDOW,       # master switch for two-pass window translation
+    CORS_ALLOWED_ORIGINS,        # comma-separated allowed origins for CORS
 )
 
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
 from database.connection import init_pool, close_pool   # Fix 1: pool lifecycle
 from database.queries import create_meeting, save_utterance
-from auth import validate_ws_token, reject_websocket    # Fix 4: auth
+from auth import validate_ws_token, reject_websocket, set_runtime_token
 from report_writer import (                             # Fix 6: thread-safe writer
     start_report_writer, stop_report_writer, enqueue_report
 )
@@ -103,10 +105,19 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=(
+        [o.strip() for o in CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+        if CORS_ALLOWED_ORIGINS
+        else ["*"]
+    ),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Runtime WebSocket token ──────────────────────────────────────────────────
+# Generated once per server start. Injected into the HTML at serve-time so
+# the token is never hardcoded in source code or committed to git.
+_RUNTIME_WS_TOKEN = secrets.token_hex(32)
 
 app.mount("/static", StaticFiles(directory=os.path.join(PROJECT_ROOT, "frontend")), name="static")
 
@@ -135,6 +146,10 @@ async def startup_event():
 
     if router is not None:
         return
+
+    # Register the runtime token with the auth module
+    set_runtime_token(_RUNTIME_WS_TOKEN)
+    logger.info("[Startup] Runtime WebSocket token generated (rotates on restart).")
 
     # Fix 6: thread-safe JSONL writer
     start_report_writer(
@@ -299,7 +314,15 @@ async def health():
 async def serve_frontend():
     html_path = os.path.join(PROJECT_ROOT, "frontend", "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
-        return f.read()
+        html = f.read()
+    # Inject the runtime token into the page so the frontend can authenticate
+    # WebSocket connections without a hardcoded token in the source code.
+    token_script = f'<script>window.__WS_TOKEN__="{_RUNTIME_WS_TOKEN}";</script>'
+    html = html.replace("</head>", f"    {token_script}\n</head>")
+    return HTMLResponse(
+        content=html,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/status")

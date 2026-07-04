@@ -5,8 +5,8 @@ let audioContext = null;
 let analyser = null;
 let dataArray = null;
 let animationId = null;
-let idleAnimId = null;   // separate loop for idle wave
-let idlePhase = 0;      // phase counter for idle sine
+let idleAnimId = null;
+let idlePhase = 0;
 
 let timerInterval = null;
 let secondsElapsed = 0;
@@ -175,10 +175,9 @@ function connectWebSocket() {
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.host || 'localhost:8000';
-    // ⚠️  DEMO ONLY — This token is visible to anyone who opens DevTools.
-    // Before production: replace with a short-lived token fetched from
-    // GET /api/session-token (server generates it per page load, not hardcoded).
-    const TOKEN = "2ff2ad074c8dfe1fb67948e1d49d9f2687f4b28439b210a443688c95427da087";
+    // Token is injected into the HTML by the server at serve-time.
+    // It rotates on every server restart and never appears in source code.
+    const TOKEN = window.__WS_TOKEN__ || "";
     const wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
 
     ws = new WebSocket(wsUrl);

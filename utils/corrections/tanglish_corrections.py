@@ -4,6 +4,7 @@ TANGLISH_CORRECTIONS = {
     # Safe because they are usually standalone complete words
     "கிராமராஜ் காட்டணன்": "Ramraj Cotton",
     "வேட்டினிருவனத்தில்": "Dhoti Company",
+    "தந்தி டிவியின்": "Thanthi TV",
     "ராமராஜ்": "Ramraj",
     "காட்டணன்": "Cotton",
     "வேட்டி": "Dhoti",
@@ -13,6 +14,9 @@ TANGLISH_CORRECTIONS = {
     "நாயிஸ்": "noise",
     "தோசை": "dosa",
     "இட்லி": "idli",
+    "தந்தி டிவியின்": "Thanthi TV",
+    "நியூஸ்":"News",
+    "நாம": "ours",
     "பிரியாணி": "biryani",
     "பில்டர்": "filter",
     "போண்டா": "bondai",

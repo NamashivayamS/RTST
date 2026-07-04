@@ -23,9 +23,14 @@ Development fallback: values below are used only when the env var is absent.
 
 import os
 
+# ── Environment mode ──────────────────────────────────────────────────────────
+# Set ENVIRONMENT=production on the company server to activate safety checks.
+# In development: defaults to "development" (lenient, works out-of-the-box).
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
 # ── Streaming / VAD thresholds ────────────────────────────────────────────────
 SAMPLE_RATE          = 16000
-VAD_SILENCE_SEC      = 0.9    # seconds of silence before utterance fires
+VAD_SILENCE_SEC      = 0.7    # seconds of silence before utterance fires
 VAD_MIN_SPEECH_SEC   = 0.5    # minimum utterance length to process
 VAD_MAX_SPEECH_SEC   = 7.0    # force-fire after this many seconds of continuous speech
 VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
@@ -108,6 +113,12 @@ DEFAULT_DEPARTMENT_ID = os.environ.get(
     "b6f8468a-477c-4045-a696-c402afae99a5"   # dev only
 )
 
+# ── CORS allowed origins ──────────────────────────────────────────────────────
+# In production: set to a comma-separated list of allowed domains.
+#   export CORS_ALLOWED_ORIGINS="https://translate.company.com"
+# In development: leave empty → allows all origins (works out-of-the-box).
+CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+
 # ── Encryption key path (env-first, dev fallback) ─────────────────────────────
 # Point this at wherever server_public.key lives on your deployment machine.
 SERVER_PUBLIC_KEY_PATH = os.environ.get(
@@ -116,13 +127,16 @@ SERVER_PUBLIC_KEY_PATH = os.environ.get(
 )
 
 # ── Production safety check ───────────────────────────────────────────────────
-# Uncomment these lines when deploying to production to make misconfiguration
-# an instant hard crash rather than a silent security hole.
-#
-# _REQUIRED_ENV = ["POSTGRES_PASSWORD", "POSTGRES_USER", "DEFAULT_DEPARTMENT_ID"]
-# for _var in _REQUIRED_ENV:
-#     if not os.environ.get(_var):
-#         raise RuntimeError(
-#             f"[config] Required environment variable '{_var}' is not set. "
-#             f"Set it before starting the server."
-#         )
+# When ENVIRONMENT=production, crash on startup if critical secrets are missing.
+# This ensures the company server never runs with dev fallback credentials.
+if ENVIRONMENT == "production":
+    _REQUIRED_ENV = [
+        "POSTGRES_PASSWORD", "POSTGRES_USER",
+        "DEFAULT_DEPARTMENT_ID", "SESSION_TOKEN",
+    ]
+    for _var in _REQUIRED_ENV:
+        if not os.environ.get(_var):
+            raise RuntimeError(
+                f"[config] ENVIRONMENT=production but required variable "
+                f"'{_var}' is not set. Set it before starting the server."
+            )

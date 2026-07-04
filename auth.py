@@ -72,10 +72,24 @@ if not _SESSION_TOKEN:
         "Using insecure dev token. Set SESSION_TOKEN before deploying."
     )
 
+# ── Runtime token (generated per server restart) ──────────────────────────────
+# This token is injected into the frontend HTML at serve-time so it never
+# appears in source code or git history. It rotates on every server restart.
+_RUNTIME_TOKEN: str = ""
+
+
+def set_runtime_token(token: str) -> None:
+    """Called once at startup to register the auto-generated runtime token."""
+    global _RUNTIME_TOKEN
+    _RUNTIME_TOKEN = token
+
 
 def validate_ws_token(token: str | None) -> bool:
     """
     Returns True if the token is valid, False otherwise.
+
+    Accepts EITHER the static SESSION_TOKEN (from env) OR the runtime token
+    (auto-generated per server restart and injected into the frontend HTML).
 
     Uses hmac.compare_digest() for constant-time comparison — this prevents
     timing attacks where an attacker could guess the token one character at
@@ -83,7 +97,11 @@ def validate_ws_token(token: str | None) -> bool:
     """
     if not token:
         return False
-    return hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode())
+    token_bytes = token.encode()
+    return (
+        hmac.compare_digest(token_bytes, _SESSION_TOKEN.encode())
+        or (_RUNTIME_TOKEN and hmac.compare_digest(token_bytes, _RUNTIME_TOKEN.encode()))
+    )
 
 
 async def reject_websocket(websocket: WebSocket, reason: str) -> None:

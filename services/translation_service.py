@@ -286,7 +286,9 @@ class TranslationService:
                 f"Supported: {list(LANG_CODE_MAP.keys())}"
             )
             
-        if detected_language == "en":
+        if detected_language == target_language:
+            tgt_lang = src_lang
+        elif detected_language == "en":
             # If English is spoken, translate TO the target language from the UI dropdown
             tgt_lang = LANG_CODE_MAP.get(target_language, "tam_Taml")
         else:

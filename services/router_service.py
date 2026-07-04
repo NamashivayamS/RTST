@@ -537,7 +537,9 @@ class RouterService:
                 "translation_time": 0.0,
             }
 
-        if src_lang == "en":
+        if src_lang == target_lang:
+            tgt_indic = src_indic
+        elif src_lang == "en":
             tgt_indic = LANG_CODE_MAP.get(target_lang, "tam_Taml")
         else:
             tgt_indic = "eng_Latn"

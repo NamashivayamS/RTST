@@ -14,3 +14,6 @@ decrypted_audio/
 
 logs/
 whisper-tamil-medium-ct2/
+*.webm
+Fine_tune/
+Subtitle_Extract/yt_audio_download
