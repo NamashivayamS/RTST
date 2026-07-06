@@ -4,6 +4,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import soundfile as sf
 import numpy as np
+from database.connection import init_pool
+init_pool()
 from services.speaker_id_service import SpeakerIDService
 
 # ── Fill these in — one enrollment clip + one test clip per person ─────
@@ -34,10 +36,13 @@ service = SpeakerIDService()
 
 # ── Enroll everyone first ───────────────────────────────────────────
 print("\n=== ENROLLMENT ===")
+name_to_id = {}
 for name, clips in SPEAKERS.items():
     audio, sr = load_audio(clips["enroll"])
     print(f"Enrolling {name} ({len(audio)/sr:.1f}s)...")
-    service.enroll_speaker(name, audio, sample_rate=sr, meeting_id="test_meeting")
+    res = service.enroll_speaker(name, audio, sample_rate=sr, meeting_id="test_meeting")
+    if res:
+        name_to_id[name] = res["profile_id"]
 
 # ── Cross-check every test clip against every enrolled profile ─────
 print("\n=== CROSS-CHECK MATRIX ===")
@@ -51,7 +56,15 @@ results_summary = []
 for test_name, clips in SPEAKERS.items():
     audio, sr = load_audio(clips["test"])
     result = service.identify_speaker(audio, sample_rate=sr, meeting_id="test_meeting", threshold=THRESHOLD)
-    scores = result["scores"]
+    
+    # Calculate similarity score against all enrolled speakers dynamically
+    scores = {}
+    with service.lock:
+        local_profiles = service.meeting_profiles.get("test_meeting", {})
+        for name, p_id in name_to_id.items():
+            if p_id in local_profiles:
+                test_emb = service.get_embedding(audio, sr)
+                scores[name] = service.compute_similarity(test_emb, local_profiles[p_id]["embedding"])
 
     print(f"{test_name:<15}", end="")
     for enrolled_name in SPEAKERS:
@@ -59,8 +72,8 @@ for test_name, clips in SPEAKERS.items():
         print(f"{score:>15.4f}", end="")
     print()
 
-    correct = (result["speaker_id"] == test_name)
-    results_summary.append((test_name, result["speaker_id"], correct))
+    correct = (result["speaker_name"] == test_name)
+    results_summary.append((test_name, result["speaker_name"], correct))
 
 # ── Verdict ──────────────────────────────────────────────────────────
 print("\n=== VERDICT ===")

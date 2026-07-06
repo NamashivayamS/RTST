@@ -3,7 +3,37 @@ import threading
 import torch
 import numpy as np
 import torchaudio.transforms as T
+import uuid
+import logging
 from speechbrain.inference.speaker import EncoderClassifier
+from database.queries import (
+    load_global_speaker_profiles,
+    save_global_speaker_profile,
+    update_global_speaker_name,
+    delete_global_speaker_profile,
+)
+
+logger = logging.getLogger("ispeak.speaker_id")
+
+# ──────────────────────────────────────────────────────────────────
+# SpaCy NER — lazy-loaded on first call to avoid startup penalty.
+# The small English model (en_core_web_sm, ~12 MB) runs on CPU and
+# processes a typical 15-word sentence in < 2 ms.
+# ──────────────────────────────────────────────────────────────────
+_nlp = None
+
+def _get_nlp():
+    """Lazy-load SpaCy's small English pipeline on first use."""
+    global _nlp
+    if _nlp is None:
+        try:
+            import spacy
+            _nlp = spacy.load("en_core_web_sm")
+            print("SpeakerIDService: SpaCy NER model 'en_core_web_sm' loaded.")
+        except Exception as e:
+            print(f"SpeakerIDService: SpaCy NER unavailable ({e}). Falling back to regex-only.")
+            _nlp = False  # sentinel — don't retry on every call
+    return _nlp if _nlp is not False else None
 
 # Self-introduction patterns — English + common Tamil/Tanglish phrasings.
 # Conservative on purpose: a missed name just means no auto-enrollment for
@@ -35,27 +65,30 @@ _NON_NAME_WORDS = {
     "hoping", "planning", "starting", "finishing", "waiting", "listening",
     "checking", "assuming", "guessing", "worried", "concerned", "curious",
     "interested", "certain", "positive", "confident", "aware", "on", "off",
+    # Local geographic/corporate terms prone to false-positive NER name extraction
+    "rajasthan", "coimbatore", "tirupur", "chennai", "india", "tamil", "nadu",
+    "avinas", "avinashi", "kongu", "cotton", "ramraj", "madurai",
 }
 
 
 class SpeakerIDService:
     """
     Speaker Identification and Verification Service using SpeechBrain's ECAPA-TDNN.
+    Persists profiles globally in PostgreSQL, keyed by a synthetic UUID.
 
-    IMPORTANT — meeting-scoped, not global:
-    RouterService is a single shared instance across all WebSocket connections.
-    Enrolled voiceprints are therefore stored per `meeting_id`, not in one flat
-    dict — otherwise two simultaneous meetings would leak speaker identities
-    into each other. Every public method takes `meeting_id` as a required arg.
-
-    Call clear_meeting(meeting_id) when a meeting/connection ends, or enrolled
-    profiles will accumulate in memory indefinitely across the server's uptime.
+    NOTE (Known Limitations & Architectural Trade-offs):
+    1. Enrollment-Time Blind Spot: When a speaker introduces themselves (e.g. "I am Namas"),
+       `enroll_speaker` unconditionally generates a new profile UUID without checking if that
+       physical speaker already has an existing profile from a past meeting. Passive matching
+       via `identify_speaker` only takes effect for subsequent utterances after someone else has
+       spoken and been matched.
+    2. Concurrent Meeting Staleness: If two concurrent meetings load profiles from PostgreSQL
+       at startup, changes to `self.global_profiles` (like rename or merge) in one meeting won't
+       be dynamically synchronized to the other in-memory instance until the second meeting is
+       restarted. This avoids aggressive database polling overhead.
     """
 
     def __init__(self, model_name: str = "speechbrain/spkrec-ecapa-voxceleb", device: str = None):
-        # Default is CPU, not auto-detect — keeps GPU VRAM free for
-        # Whisper-Tamil + IndicTrans2. Pass device="cuda" explicitly if you
-        # ever want to benchmark GPU placement.
         self.device = device if device is not None else "cpu"
 
         print(f"SpeakerIDService: Loading model '{model_name}' on {self.device}...")
@@ -63,17 +96,21 @@ class SpeakerIDService:
             source=model_name,
             run_opts={"device": self.device}
         )
+        self.model_name = model_name
         print("SpeakerIDService: Model loaded successfully.")
 
-        # meeting_id -> {speaker_name: normalized embedding}
-        self.meeting_profiles: dict[str, dict[str, np.ndarray]] = {}
+        # Dynamically determine the embedding dimension
+        dummy_audio = np.zeros(16000, dtype=np.float32)
+        dummy_emb = self.get_embedding(dummy_audio, 16000)
+        self.emb_dim = len(dummy_emb)
+        print(f"SpeakerIDService: Detected embedding dimension = {self.emb_dim}")
 
-        # Serializes all profile dict reads/writes. Needed because multiple
-        # _run_pipeline tasks (even within the same meeting) can run
-        # concurrently via run_in_executor — without this, two near-simultaneous
-        # enrollments for the same name can race on the read-modify-write
-        # averaging step and silently corrupt the stored embedding.
-        # Mirrors the existing stt_lock/translation_lock pattern in RouterService.
+        # meeting_id -> {profile_id_uuid: {"name": name, "embedding": np.ndarray}}
+        self.meeting_profiles: dict[str, dict[str, dict]] = {}
+
+        # Load global profiles from DB compatible with active model/dimension
+        self.global_profiles = load_global_speaker_profiles(self.model_name, self.emb_dim)
+
         self.lock = threading.Lock()
 
     # ──────────────────────────────────────────────────────────────────
@@ -81,7 +118,7 @@ class SpeakerIDService:
     # ──────────────────────────────────────────────────────────────────
 
     def get_embedding(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
-        """Extract a 192-dim speaker embedding from a mono float32 audio array."""
+        """Extract a speaker embedding from a mono float32 audio array."""
         if audio.ndim != 1:
             raise ValueError(f"Expected 1-D audio array, got shape {audio.shape}")
         if len(audio) == 0:
@@ -107,7 +144,7 @@ class SpeakerIDService:
     # Meeting-scoped profile management
     # ──────────────────────────────────────────────────────────────────
 
-    def _get_meeting_profiles(self, meeting_id: str) -> dict[str, np.ndarray]:
+    def _get_meeting_profiles(self, meeting_id: str) -> dict[str, dict]:
         if meeting_id not in self.meeting_profiles:
             self.meeting_profiles[meeting_id] = {}
         return self.meeting_profiles[meeting_id]
@@ -119,42 +156,155 @@ class SpeakerIDService:
         if removed is not None:
             print(f"SpeakerIDService: Cleared {len(removed)} profile(s) for meeting {meeting_id}.")
 
-    def enroll_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str) -> bool:
+    def enroll_speaker(self, speaker_name: str, audio: np.ndarray, sample_rate: int, meeting_id: str) -> dict:
         """
-        Extract embedding and register it for `speaker_id` within `meeting_id`.
-        Repeated enrollments for the same name are averaged for robustness.
+        Extract embedding and register it for `speaker_name` within `meeting_id`.
+        Before minting a fresh UUID, checks if the voice matches an existing local
+        speaker (threshold >= 0.50) or global speaker (threshold >= 0.70) to prevent
+        duplicate enrollments and speaker identification flip-flopping.
         """
         try:
-            # Embedding extraction itself doesn't need the lock (no shared
-            # state touched), but the whole read-modify-write on `profiles`
-            # must be atomic to avoid two concurrent enrollments for the same
-            # name racing on the averaging step.
             new_emb = self.get_embedding(audio, sample_rate)
+            if new_emb is None:
+                return {}
+
+            norm = np.linalg.norm(new_emb)
+            normalized_emb = new_emb / norm if norm > 0 else new_emb
 
             with self.lock:
+                # Tier A: Check local session profiles first (threshold >= 0.50)
                 profiles = self._get_meeting_profiles(meeting_id)
-                if speaker_id in profiles:
-                    old_emb = profiles[speaker_id]
-                    avg_emb = (old_emb + new_emb) / 2.0
-                    norm = np.linalg.norm(avg_emb)
-                    profiles[speaker_id] = avg_emb / norm if norm > 0 else avg_emb
-                    print(f"SpeakerIDService: Updated '{speaker_id}' in meeting {meeting_id} (averaged).")
-                else:
-                    norm = np.linalg.norm(new_emb)
-                    profiles[speaker_id] = new_emb / norm if norm > 0 else new_emb
-                    print(f"SpeakerIDService: Enrolled '{speaker_id}' in meeting {meeting_id}.")
-            return True
-        except Exception as e:
-            print(f"SpeakerIDService Error: Failed to enroll '{speaker_id}': {e}")
-            return False
+                best_local_id = None
+                best_local_name = None
+                best_local_sim = 0.0
+                for p_id, data in profiles.items():
+                    sim = self.compute_similarity(normalized_emb, data["embedding"])
+                    if sim > best_local_sim:
+                        best_local_sim = sim
+                        best_local_id = p_id
+                        best_local_name = data["name"]
 
-    def remove_speaker(self, speaker_id: str, meeting_id: str) -> bool:
-        profiles = self.meeting_profiles.get(meeting_id, {})
-        if speaker_id in profiles:
-            del profiles[speaker_id]
-            print(f"SpeakerIDService: Removed '{speaker_id}' from meeting {meeting_id}.")
-            return True
+                if best_local_sim >= 0.50:
+                    print(
+                        f"SpeakerIDService: Voice matches existing local profile "
+                        f"'{best_local_name}' (ID={best_local_id}, sim={best_local_sim:.3f}). "
+                        f"Skipping duplicate enrollment."
+                    )
+                    return {"profile_id": best_local_id, "name": best_local_name}
+
+                # Tier B: Check global profiles next (threshold >= 0.70)
+                best_global_id = None
+                best_global_name = None
+                best_global_sim = 0.0
+                for p_id, data in self.global_profiles.items():
+                    sim = self.compute_similarity(normalized_emb, data["embedding"])
+                    if sim > best_global_sim:
+                        best_global_sim = sim
+                        best_global_id = p_id
+                        best_global_name = data["name"]
+
+                if best_global_sim >= 0.70:
+                    print(
+                        f"SpeakerIDService: Voice matches existing global profile "
+                        f"'{best_global_name}' (ID={best_global_id}, sim={best_global_sim:.3f}). "
+                        f"Auto-enrolling in meeting {meeting_id} instead of minting a duplicate."
+                    )
+                    profiles[best_global_id] = {
+                        "name": best_global_name,
+                        "embedding": self.global_profiles[best_global_id]["embedding"]
+                    }
+                    return {"profile_id": best_global_id, "name": best_global_name}
+
+                # Tier C: Truly new speaker, proceed to mint fresh UUID
+                profile_id = str(uuid.uuid4())
+                profiles[profile_id] = {
+                    "name": speaker_name,
+                    "embedding": normalized_emb
+                }
+                self.global_profiles[profile_id] = {
+                    "name": speaker_name,
+                    "embedding": normalized_emb
+                }
+                print(f"SpeakerIDService: Enrolled new speaker '{speaker_name}' with ID {profile_id} for meeting {meeting_id}.")
+
+            # Persist to global database only if it's a brand new profile
+            save_global_speaker_profile(
+                profile_id, speaker_name, normalized_emb,
+                self.model_name, self.emb_dim
+            )
+
+            return {"profile_id": profile_id, "name": speaker_name}
+        except Exception as e:
+            print(f"SpeakerIDService Error: Failed to enroll '{speaker_name}': {e}")
+            return {}
+
+    def remove_speaker(self, profile_id: str, meeting_id: str) -> bool:
+        with self.lock:
+            profiles = self.meeting_profiles.get(meeting_id, {})
+            if profile_id in profiles:
+                del profiles[profile_id]
+                print(f"SpeakerIDService: Removed '{profile_id}' from meeting {meeting_id}.")
+                return True
         return False
+
+    def rename_speaker(self, profile_id: str, new_name: str, meeting_id: str) -> bool:
+        """
+        Strictly changes the name label of a specific profile_id.
+        No automatic voiceprint modifications.
+        """
+        with self.lock:
+            local_profiles = self.meeting_profiles.get(meeting_id, {})
+            if profile_id not in local_profiles:
+                print(f"SpeakerIDService: Cannot rename — '{profile_id}' not found in local meeting {meeting_id}.")
+                return False
+
+            local_profiles[profile_id]["name"] = new_name
+            if profile_id in self.global_profiles:
+                self.global_profiles[profile_id]["name"] = new_name
+            print(f"SpeakerIDService: Renamed speaker ID {profile_id} → '{new_name}' in meeting {meeting_id}.")
+
+        # Persist to database
+        update_global_speaker_name(profile_id, new_name)
+        return True
+
+    def merge_speakers(self, source_profile_id: str, target_profile_id: str, meeting_id: str) -> bool:
+        """
+        Averages the voiceprints of source and target, assigns the target's label,
+        and deletes the source profile. Explicitly triggered by user intent.
+        """
+        with self.lock:
+            local_profiles = self.meeting_profiles.get(meeting_id, {})
+            if source_profile_id not in self.global_profiles or target_profile_id not in self.global_profiles:
+                return False
+
+            source_data = self.global_profiles[source_profile_id]
+            target_data = self.global_profiles[target_profile_id]
+            target_name = target_data["name"]  # Capture name defensively under lock
+
+            # 1. Average embeddings
+            merged = (source_data["embedding"] + target_data["embedding"]) / 2.0
+            norm = np.linalg.norm(merged)
+            normalized_merged = merged / norm if norm > 0 else merged
+
+            # 2. Update target profile with merged embedding
+            self.global_profiles[target_profile_id]["embedding"] = normalized_merged
+            if target_profile_id in local_profiles:
+                local_profiles[target_profile_id]["embedding"] = normalized_merged
+
+            # 3. Remove source profile from memory maps
+            self.global_profiles.pop(source_profile_id, None)
+            local_profiles.pop(source_profile_id, None)
+            print(f"SpeakerIDService: Merged {source_profile_id} into {target_profile_id} ({target_name}).")
+
+        # 4. Save merged target voiceprint to database
+        save_global_speaker_profile(
+            target_profile_id, target_name, normalized_merged,
+            self.model_name, self.emb_dim
+        )
+        
+        # 5. Delete source profile from database
+        delete_global_speaker_profile(source_profile_id)
+        return True
 
     @staticmethod
     def compute_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
@@ -167,38 +317,71 @@ class SpeakerIDService:
 
     def identify_speaker(self, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
         """
-        Identify the speaker by comparing against profiles enrolled in THIS
-        meeting only. Returns speaker_id="unknown" if no enrolled profile
-        clears the threshold — including when nobody has been enrolled yet.
+        Identify speaker using a single lock acquisition to copy local and global snapshots.
         """
         with self.lock:
-            profiles = dict(self.meeting_profiles.get(meeting_id, {}))  # snapshot
-        if not profiles:
-            return {"speaker_id": "unknown", "similarity": 0.0, "scores": {}}
+            local_snapshot = dict(self.meeting_profiles.get(meeting_id, {}))
+            global_snapshot = dict(self.global_profiles)
 
         try:
             test_emb = self.get_embedding(audio, sample_rate)
-            scores = {spk_id: self.compute_similarity(test_emb, ref_emb)
-                      for spk_id, ref_emb in profiles.items()}
+            if test_emb is None:
+                return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0}
 
-            best_spk = max(scores, key=scores.get)
-            best_score = scores[best_spk]
-            matched_spk = best_spk if best_score >= threshold else "unknown"
+            # Step 1: Match against local session profiles (low threshold: 0.5)
+            best_local_id = None
+            best_local_name = "Unknown Speaker"
+            best_local_sim = 0.0
+            
+            for profile_id, data in local_snapshot.items():
+                sim = self.compute_similarity(test_emb, data["embedding"])
+                if sim > best_local_sim:
+                    best_local_sim = sim
+                    best_local_id = profile_id
+                    best_local_name = data["name"]
 
-            return {"speaker_id": matched_spk, "similarity": best_score, "scores": scores}
+            if best_local_sim >= threshold:
+                return {"speaker_id": best_local_id, "speaker_name": best_local_name, "similarity": best_local_sim}
+
+            # Step 2: Match against global database profiles (strict threshold: 0.7)
+            best_global_id = None
+            best_global_name = "Unknown Speaker"
+            best_global_sim = 0.0
+            best_global_emb = None
+            
+            for profile_id, data in global_snapshot.items():
+                sim = self.compute_similarity(test_emb, data["embedding"])
+                if sim > best_global_sim:
+                    best_global_sim = sim
+                    best_global_id = profile_id
+                    best_global_name = data["name"]
+                    best_global_emb = data["embedding"]
+
+            if best_global_sim >= 0.70:
+                # Auto-enroll in the current local meeting session
+                with self.lock:
+                    if meeting_id not in self.meeting_profiles:
+                        self.meeting_profiles[meeting_id] = {}
+                    self.meeting_profiles[meeting_id][best_global_id] = {
+                        "name": best_global_name,
+                        "embedding": best_global_emb
+                    }
+                return {"speaker_id": best_global_id, "speaker_name": best_global_name, "similarity": best_global_sim}
+
+            return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0}
         except Exception as e:
             print(f"SpeakerIDService Error: Identification failed: {e}")
-            return {"speaker_id": "unknown", "similarity": 0.0, "scores": {}, "error": str(e)}
+            return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0, "error": str(e)}
 
-    def verify_speaker(self, speaker_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
+    def verify_speaker(self, profile_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
         with self.lock:
             profiles = dict(self.meeting_profiles.get(meeting_id, {}))  # snapshot
-        if speaker_id not in profiles:
-            return {"verified": False, "similarity": 0.0, "error": f"'{speaker_id}' not enrolled in this meeting"}
+        if profile_id not in profiles:
+            return {"verified": False, "similarity": 0.0, "error": f"'{profile_id}' not enrolled in this meeting"}
 
         try:
             test_emb = self.get_embedding(audio, sample_rate)
-            sim = self.compute_similarity(test_emb, profiles[speaker_id])
+            sim = self.compute_similarity(test_emb, profiles[profile_id]["embedding"])
             return {"verified": sim >= threshold, "similarity": sim, "threshold": threshold}
         except Exception as e:
             print(f"SpeakerIDService Error: Verification failed: {e}")
@@ -208,18 +391,118 @@ class SpeakerIDService:
     # Name extraction from STT text (drives auto-enrollment)
     # ──────────────────────────────────────────────────────────────────
 
+    # Introduction cues that must co-occur with a PERSON entity for
+    # the NER path to accept the name.  Keeps NER conservative — a
+    # mention of "Modi" in a news discussion won't auto-enroll.
+    _INTRO_CUES = {
+        "i am", "i'm", "my name", "this is", "myself",
+        "here", "speaking", "joined",
+        # Tamil cue (romanised by Whisper sometimes)
+        "en peyar",
+    }
+
     @staticmethod
-    def extract_name_from_text(text: str) -> str | None:
+    def _extract_name_regex(text: str) -> str | None:
         """
-        Looks for self-introduction patterns in STT output.
-        Returns the extracted name (title-cased) or None if nothing matched.
+        Primary extraction path — fast regex patterns.
+        Returns the extracted name (title-cased) or None.
         """
-        if not text:
-            return None
         for pattern in _NAME_RE:
             match = pattern.search(text)
             if match:
                 name = match.group(1).strip()
+
+                # Check capitalization for English names to prevent false
+                # positive matching of verbs/adverbs/adjectives
+                # (e.g. "I am currently...", "I'm studying...")
+                if re.match(r'^[A-Za-z]+$', name):
+                    start_idx = match.start(1)
+                    if start_idx >= 0 and start_idx < len(text):
+                        first_char = text[start_idx]
+                        if not first_char.isupper():
+                            continue
+
                 if len(name) >= 2 and name.lower() not in _NON_NAME_WORDS:
                     return name.title()
         return None
+
+    @classmethod
+    def _extract_name_ner(cls, text: str) -> str | None:
+        """
+        Fallback extraction path — SpaCy NER.
+
+        Scans the transcription for PERSON entities on a sentence-by-sentence basis,
+        accepting a candidate PERSON name only if its enclosing sentence also contains
+        an introduction cue (e.g., "I am", "I'm", "my name", "speaking", "here").
+        This prevents false-positive association across different clauses/sentences
+        in a single turn (e.g. "I'm doing great. How are you doing Ram?").
+        """
+        nlp = _get_nlp()
+        if nlp is None:
+            return None
+
+        doc = nlp(text)
+        
+        # Process each sentence independently to ensure co-occurrence of cue and name
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_lower = sent_text.lower()
+            
+            # Check if this sentence contains at least one introduction cue
+            has_cue = any(cue in sent_lower for cue in cls._INTRO_CUES)
+            if not has_cue:
+                continue
+
+            # Identify PERSON entities residing inside this specific sentence
+            sent_start = sent.start_char
+            sent_end = sent.end_char
+            
+            for ent in doc.ents:
+                if ent.label_ == "PERSON" and ent.start_char >= sent_start and ent.end_char <= sent_end:
+                    name = ent.text.strip()
+                    if len(name) < 2 or name.lower() in _NON_NAME_WORDS:
+                        continue
+
+                    # Strong cues can appear anywhere in the sentence
+                    strong_cues = {"i am", "i'm", "my name", "this is", "myself", "en peyar"}
+                    if any(cue in sent_lower for cue in strong_cues):
+                        return name.title()
+
+                    # Weak cues must be adjacent/linked to the name in the sentence
+                    name_lower = name.lower()
+                    weak_patterns = [
+                        f"{name_lower} here",
+                        f"{name_lower} is here",
+                        f"{name_lower} speaking",
+                        f"{name_lower} is speaking",
+                        f"{name_lower} joined",
+                        f"{name_lower} has joined"
+                    ]
+                    if any(pat in sent_lower for pat in weak_patterns):
+                        return name.title()
+
+        return None
+
+    @classmethod
+    def extract_name_from_text(cls, text: str) -> str | None:
+        """
+        Two-pass name extraction from STT output:
+          1. Fast regex patterns (< 0.01 ms)
+          2. SpaCy NER fallback  (< 2 ms on CPU)
+
+        Returns the extracted name (title-cased) or None if nothing matched.
+        """
+        if not text:
+            return None
+
+        # Pass 1 — regex (fast, high-precision)
+        name = cls._extract_name_regex(text)
+        if name:
+            return name
+
+        # Pass 2 — NER fallback (catches unstructured intros like
+        # "Namashivayam here, let's start" or "This is Gobinath speaking")
+        name = cls._extract_name_ner(text)
+        if name:
+            print(f"SpeakerIDService: NER extracted name '{name}' (regex missed).")
+        return name

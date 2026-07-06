@@ -88,7 +88,7 @@ from config import (
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
 from database.connection import init_pool, close_pool   # Fix 1: pool lifecycle
-from database.queries import create_meeting, save_utterance
+from database.queries import create_meeting, save_utterance, rename_speaker_label, merge_speaker_utterances
 from auth import validate_ws_token, reject_websocket, set_runtime_token
 from report_writer import (                             # Fix 6: thread-safe writer
     start_report_writer, stop_report_writer, enqueue_report
@@ -499,6 +499,96 @@ async def websocket_translate(websocket: WebSocket):
                             state.no_speech_threshold   = preset["no_speech_threshold"]
                             state.rms_gate              = preset["rms_gate"]
                             logger.info("[Config] Environment → %s", ctrl["environment"])
+
+                elif ctrl.get("action") == "rename_speaker":
+                    speaker_id = ctrl.get("speaker_id", "").strip()
+                    new_name = ctrl.get("new_name", "").strip()
+                    if speaker_id and new_name and state.meeting_id:
+                        # Fetch the old name defensively from memory under the service lock
+                        old_name = "Unknown Speaker"
+                        with router.speaker_id_service.lock:
+                            local_profiles = router.speaker_id_service.meeting_profiles.get(state.meeting_id, {})
+                            if speaker_id in local_profiles:
+                                old_name = local_profiles[speaker_id]["name"]
+                            elif speaker_id in router.speaker_id_service.global_profiles:
+                                old_name = router.speaker_id_service.global_profiles[speaker_id]["name"]
+
+                        # 1. Rename the in-memory voiceprint profile
+                        renamed = router.speaker_id_service.rename_speaker(
+                            speaker_id, new_name, state.meeting_id
+                        )
+                        # 2. Update all past DB records on a background thread
+                        if renamed and old_name != "Unknown Speaker" and old_name != new_name:
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda: rename_speaker_label(
+                                        state.meeting_id, speaker_id, new_name
+                                    )
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[DB] rename_speaker_label failed for speaker ID %s ('%s' → '%s')",
+                                    speaker_id, old_name, new_name,
+                                )
+                        # 3. Broadcast confirmation back to the client
+                        await manager.send_json(websocket, {
+                            "type": "speaker_renamed",
+                            "speaker_id": speaker_id,
+                            "new_name": new_name,
+                            "success": renamed,
+                        })
+                        logger.info(
+                            "[SpeakerID] Rename speaker ID %s → '%s' (success=%s)",
+                            speaker_id, new_name, renamed
+                        )
+
+                elif ctrl.get("action") == "merge_speakers":
+                    source_id = ctrl.get("source_id", "").strip()
+                    target_id = ctrl.get("target_id", "").strip()
+                    if source_id and target_id and source_id != target_id and state.meeting_id:
+                        # Fetch names for database correction before merging
+                        source_name = "Unknown Speaker"
+                        target_name = "Unknown Speaker"
+                        with router.speaker_id_service.lock:
+                            if source_id in router.speaker_id_service.global_profiles:
+                                source_name = router.speaker_id_service.global_profiles[source_id]["name"]
+                            if target_id in router.speaker_id_service.global_profiles:
+                                target_name = router.speaker_id_service.global_profiles[target_id]["name"]
+
+                        # 1. Merge voiceprints in service/DB
+                        merged = router.speaker_id_service.merge_speakers(
+                            source_id, target_id, state.meeting_id
+                        )
+
+                        # 2. Update all past utterances for the source speaker to target speaker name and target speaker ID
+                        if merged and source_name != "Unknown Speaker" and target_name != "Unknown Speaker":
+                            try:
+                                await loop.run_in_executor(
+                                    None,
+                                    lambda: merge_speaker_utterances(
+                                        state.meeting_id, source_id, target_id, target_name
+                                    )
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "[DB] merge_speaker_utterances failed during merge for speaker ID %s → %s",
+                                    source_id, target_id,
+                                )
+
+                        # 3. Broadcast merge confirmation back to client
+                        await manager.send_json(websocket, {
+                            "type": "speakers_merged",
+                            "source_id": source_id,
+                            "target_id": target_id,
+                            "target_name": target_name,
+                            "success": merged,
+                        })
+                        logger.info(
+                            "[SpeakerID] Merged speaker ID %s into %s (success=%s)",
+                            source_id, target_id, merged
+                        )
+
                 continue
 
             if "bytes" not in message or not message["bytes"]:
@@ -647,7 +737,8 @@ async def _run_pipeline(
         src_lang = result.get("src_lang", "")
 
         # ── Speaker ID: auto-enroll from self-intro, else identify ─────────────
-        speaker_label = "unknown"
+        speaker_id = "unknown"
+        speaker_label = "Unknown Speaker"
         try:
             speaker_text = result.get("cleaned_text", result.get("raw_text", ""))
             intro_name = router.speaker_id_service.extract_name_from_text(speaker_text)
@@ -656,14 +747,16 @@ async def _run_pipeline(
                 speaker_text[:80], intro_name
             )
             if intro_name:
-                await loop.run_in_executor(
+                enroll_res = await loop.run_in_executor(
                     None,
                     lambda: router.speaker_id_service.enroll_speaker(
                         intro_name, audio, SAMPLE_RATE, state.meeting_id
                     )
                 )
-                speaker_label = intro_name
-                pl_logger.info("[SpeakerID] Enrolled '%s' for meeting %s", intro_name, state.meeting_id)
+                if enroll_res:
+                    speaker_id = enroll_res.get("profile_id", "unknown")
+                    speaker_label = enroll_res.get("name", "Unknown Speaker")
+                    pl_logger.info("[SpeakerID] Enrolled '%s' (ID=%s) for meeting %s", speaker_label, speaker_id, state.meeting_id)
             else:
                 id_result = await loop.run_in_executor(
                     None,
@@ -671,10 +764,11 @@ async def _run_pipeline(
                         audio, SAMPLE_RATE, state.meeting_id
                     )
                 )
-                speaker_label = id_result["speaker_id"]
+                speaker_id = id_result.get("speaker_id", "unknown")
+                speaker_label = id_result.get("speaker_name", "Unknown Speaker")
                 pl_logger.info(
-                    "[SpeakerID] Identified as '%s' (sim=%.3f)",
-                    speaker_label, id_result.get("similarity", 0.0)
+                    "[SpeakerID] Identified as '%s' (ID=%s, sim=%.3f)",
+                    speaker_label, speaker_id, id_result.get("similarity", 0.0)
                 )
         except Exception:
             pl_logger.exception("[SpeakerID] Failed — continuing without speaker label.")
@@ -784,6 +878,7 @@ async def _run_pipeline(
             "source_text":  input_text,
             "src_lang":     src_lang,
             "tgt_lang":     tgt_indic,
+            "speaker_id":   speaker_id,
             "speaker":      speaker_label,
             "confidence":   result.get("language_prob"),
             "is_draft":     window_used,   # True only if an update will follow
@@ -801,6 +896,7 @@ async def _run_pipeline(
                 "source_text":  input_text,
                 "src_lang":     src_lang,
                 "tgt_lang":     tgt_indic,
+                "speaker_id":   speaker_id,
                 "speaker":      speaker_label,
                 "trans_time_ms": int(trans_time * 1000),
                 "total_time_ms": int((result.get("stt_time", 0) + trans_time) * 1000),
@@ -826,6 +922,7 @@ async def _run_pipeline(
                         target_language=tgt_indic,
                         total_latency_ms=int(total_time * 1000),
                         speaker_label=speaker_label,
+                        speaker_id=speaker_id,
                     )
                 except Exception:
                     logging.getLogger("ispeak.db").error(

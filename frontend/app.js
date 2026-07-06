@@ -203,6 +203,8 @@ function connectWebSocket() {
         if (data.type === 'subtitle') handleSubtitle(data);
         else if (data.type === 'subtitle_update') handleSubtitleUpdate(data);
         else if (data.type === 'done') handleDone(data);
+        else if (data.type === 'speaker_renamed') handleSpeakerRenamed(data);
+        else if (data.type === 'speakers_merged') handleSpeakersMerged(data);
     };
 
     ws.onclose = (event) => {
@@ -272,6 +274,7 @@ function handleSubtitle(data) {
         // Speaker label comes from the backend's speaker ID service.
         // "unknown" means either nobody has self-introduced yet in this
         // meeting, or this utterance didn't clear the match threshold.
+        const speakerId = data.speaker_id || 'unknown';
         const speakerName = data.speaker && data.speaker !== 'unknown'
             ? data.speaker
             : 'Unknown Speaker';
@@ -280,6 +283,7 @@ function handleSubtitle(data) {
             ? data.speaker.charAt(0).toUpperCase()
             : '?';
 
+        currentLiveCard.dataset.speakerId = speakerId;
         currentLiveCard.dataset.speaker = speakerName;
 
         currentLiveCard.innerHTML = `
@@ -288,6 +292,7 @@ function handleSubtitle(data) {
                 <div class="t-speaker">
                     <div class="spk-badge">${speakerInitial}</div>
                     <span class="spk-name">${speakerName}</span>
+                    <button class="edit-spk-btn" title="Edit speaker name"><i class="fa-solid fa-pen"></i></button>
                     <span class="lang-tag">${data.src_lang || 'Auto'}</span>
                 </div>
                 <div class="t-source source-text">${data.source_text || '...'}</div>
@@ -301,7 +306,32 @@ function handleSubtitle(data) {
                 </div>
             </div>`;
         transcriptArea.appendChild(currentLiveCard);
+
+        // ── Click pencil icon to rename speaker ─────────────────────────────
+        const editBtn = currentLiveCard.querySelector('.edit-spk-btn');
+        editBtn.addEventListener('click', () => {
+            const card = editBtn.closest('.t-card');
+            const spkId = card?.dataset.speakerId;
+            const oldName = card?.dataset.speaker;
+            if (!spkId || spkId === 'unknown' || !oldName || oldName === 'Unknown Speaker') return;
+            const newName = prompt(`Rename speaker "${oldName}" to:`, oldName);
+            if (newName && newName.trim() && newName.trim() !== oldName) {
+                ws.send(JSON.stringify({
+                    action: 'rename_speaker',
+                    speaker_id: spkId,
+                    new_name: newName.trim()
+                }));
+            }
+        });
     } else {
+        if (data.speaker_id) currentLiveCard.dataset.speakerId = data.speaker_id;
+        if (data.speaker) {
+            currentLiveCard.dataset.speaker = data.speaker;
+            const nameEl = currentLiveCard.querySelector('.spk-name');
+            if (nameEl) nameEl.innerText = data.speaker;
+            const badgeEl = currentLiveCard.querySelector('.spk-badge');
+            if (badgeEl) badgeEl.innerText = data.speaker.charAt(0).toUpperCase();
+        }
         currentLiveCard.querySelector('.source-text').innerText = data.source_text || '...';
         currentLiveCard.querySelector('.target-text').innerText = data.text || '...';
         if (data.src_lang) currentLiveCard.querySelector('.lang-tag').innerText = data.src_lang;
@@ -374,6 +404,65 @@ function handleDone(data) {
     }, 2000);
 
     currentLiveCard = null;
+}
+
+/**
+ * Handles speaker_renamed: updates all transcript cards that had the speaker
+ * ID with the new one — badges, labels, and data attributes.
+ */
+function handleSpeakerRenamed(data) {
+    if (!data.success || !data.speaker_id || !data.new_name) return;
+
+    const speakerId = data.speaker_id;
+    const newName = data.new_name;
+    const newInitial = newName.charAt(0).toUpperCase();
+
+    // Update every card that has this speaker ID
+    transcriptArea.querySelectorAll('.t-card').forEach(card => {
+        if (card.dataset.speakerId === speakerId) {
+            const oldName = card.dataset.speaker;
+            card.dataset.speaker = newName;
+            const nameEl = card.querySelector('.spk-name');
+            const badgeEl = card.querySelector('.spk-badge');
+            if (nameEl) nameEl.innerText = newName;
+            if (badgeEl) badgeEl.innerText = newInitial;
+
+            // Also fix the in-memory transcript export text
+            if (oldName) {
+                fullTranscriptText = fullTranscriptText.replaceAll(oldName, newName);
+            }
+        }
+    });
+}
+
+/**
+ * Handles speakers_merged: updates all transcript cards that had the source
+ * speaker ID to the target speaker ID and target speaker name.
+ */
+function handleSpeakersMerged(data) {
+    if (!data.success || !data.source_id || !data.target_id || !data.target_name) return;
+
+    const sourceId = data.source_id;
+    const targetId = data.target_id;
+    const targetName = data.target_name;
+    const targetInitial = targetName.charAt(0).toUpperCase();
+
+    // Update every card that has the source speaker ID
+    transcriptArea.querySelectorAll('.t-card').forEach(card => {
+        if (card.dataset.speakerId === sourceId) {
+            const oldName = card.dataset.speaker;
+            card.dataset.speakerId = targetId;
+            card.dataset.speaker = targetName;
+            const nameEl = card.querySelector('.spk-name');
+            const badgeEl = card.querySelector('.spk-badge');
+            if (nameEl) nameEl.innerText = targetName;
+            if (badgeEl) badgeEl.innerText = targetInitial;
+
+            if (oldName) {
+                fullTranscriptText = fullTranscriptText.replaceAll(oldName, targetName);
+            }
+        }
+    });
 }
 
 // ── Recording ─────────────────────────────────────────────────────────────────

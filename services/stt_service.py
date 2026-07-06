@@ -17,8 +17,7 @@ WHISPER_LANG_TO_INDICTRANS = {
     "ml": "mal_Mlym",
 }
 
-# Whisper sometimes misidentifies Tamil as these languages.
-# Since we now support them, we no longer force reclassification.
+
 TAMIL_CONFUSED_AS = set()
 
 TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different scripts
@@ -29,18 +28,17 @@ RETRY_COMPRESSION_RATIO_MAX  = 3.2    # above this = hallucination, reject not r
 RETRY_NO_SPEECH_THRESHOLD    = 0.80   # above this = bad audio, worth retrying
 RETRY_BEAM_SIZE              = 3      # beam size for retry pass (reduced for latency)
 
-# Hallucination phrases Whisper emits for near-silence in Tamil context.
-# If the full transcription matches one of these, treat it as empty.
+
 HALLUCINATION_PATTERNS = [
     r"^\s*\.\s*$",                    # just a period
     r"^\s*நன்றி\s*\.?\s*$",           # "thank you" on silence
     r"^\s*சரி\s*\.?\s*$",             # "ok" on silence
     r"^\s*[\u0B80-\u0BFF]{1,3}\s*$",  # 1-3 Tamil chars only (hallucinated syllable)
     r"^\s*[a-zA-Z]{1,4}\s*$",         # 1-4 Latin chars only
-    r"^\s*\.+\s*$",                # ellipsis or multiple periods
-    r"(?i).*namashivayam.*ramraj.*tirupur.*", # Initial prompt leakage
-    r"(?i).*avinashi.*business.*culture.*brand.*", # New prompt leakage
-    r"(?i).*ramraj.*cotton.*tirupur.*veshti.*",    # New prompt leakage
+    r"^\s*\.+\s*$",                
+    r"(?i).*namashivayam.*ramraj.*tirupur.*", 
+    r"(?i).*avinashi.*business.*culture.*brand.*", 
+    r"(?i).*ramraj.*cotton.*tirupur.*veshti.*",   
     r"(?i).*hello.*how are you.*",
     r"(?i).*வணக்கம்.*எப்படி இருக்கிறீர்கள்.*",
 ]
@@ -90,7 +88,6 @@ class STTService:
     LANG_CONFIDENCE_THRESHOLD = STT_LANG_CONFIDENCE_FLOOR
 
     # Tanglish detection: fraction of words that appear to be English
-    # (Latin-script, non-punctuation) in a predominantly Tamil utterance.
     TANGLISH_ENGLISH_RATIO_THRESHOLD = 0.40
 
     def __init__(self, beam_size: int = STT_BEAM_SIZE):
