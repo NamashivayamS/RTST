@@ -250,8 +250,11 @@ class SpeakerIDService:
     def rename_speaker(self, profile_id: str, new_name: str, meeting_id: str) -> bool:
         """
         Strictly changes the name label of a specific profile_id.
-        No automatic voiceprint modifications.
+        If it was a temporary local-only profile, promotes it to a global profile
+        upon explicit rename.
         """
+        embedding = None
+        is_new_global = False
         with self.lock:
             local_profiles = self.meeting_profiles.get(meeting_id, {})
             if profile_id not in local_profiles:
@@ -259,12 +262,30 @@ class SpeakerIDService:
                 return False
 
             local_profiles[profile_id]["name"] = new_name
-            if profile_id in self.global_profiles:
+            embedding = local_profiles[profile_id]["embedding"]
+            
+            # If not already in global profiles, promote it
+            if profile_id not in self.global_profiles:
+                self.global_profiles[profile_id] = {
+                    "name": new_name,
+                    "embedding": embedding
+                }
+                is_new_global = True
+            else:
                 self.global_profiles[profile_id]["name"] = new_name
+                
             print(f"SpeakerIDService: Renamed speaker ID {profile_id} → '{new_name}' in meeting {meeting_id}.")
 
-        # Persist to database
-        update_global_speaker_name(profile_id, new_name)
+        if is_new_global:
+            # Promote to database
+            save_global_speaker_profile(
+                profile_id, new_name, embedding,
+                self.model_name, self.emb_dim
+            )
+        else:
+            # Update name in database
+            update_global_speaker_name(profile_id, new_name)
+            
         return True
 
     def merge_speakers(self, source_profile_id: str, target_profile_id: str, meeting_id: str) -> bool:
@@ -318,6 +339,9 @@ class SpeakerIDService:
     def identify_speaker(self, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
         """
         Identify speaker using a single lock acquisition to copy local and global snapshots.
+        If the speaker remains unidentified after local/global checks, they are auto-enrolled
+        locally under an anonymous "Speaker N" profile. Includes atomic concurrency safeguards
+        and embedding normalization.
         """
         with self.lock:
             local_snapshot = dict(self.meeting_profiles.get(meeting_id, {}))
@@ -328,13 +352,17 @@ class SpeakerIDService:
             if test_emb is None:
                 return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0}
 
+            # 1. Normalize embedding to match enroll_speaker's format
+            norm = np.linalg.norm(test_emb)
+            normalized_emb = test_emb / norm if norm > 0 else test_emb
+
             # Step 1: Match against local session profiles (low threshold: 0.5)
             best_local_id = None
             best_local_name = "Unknown Speaker"
             best_local_sim = 0.0
             
             for profile_id, data in local_snapshot.items():
-                sim = self.compute_similarity(test_emb, data["embedding"])
+                sim = self.compute_similarity(normalized_emb, data["embedding"])
                 if sim > best_local_sim:
                     best_local_sim = sim
                     best_local_id = profile_id
@@ -350,7 +378,7 @@ class SpeakerIDService:
             best_global_emb = None
             
             for profile_id, data in global_snapshot.items():
-                sim = self.compute_similarity(test_emb, data["embedding"])
+                sim = self.compute_similarity(normalized_emb, data["embedding"])
                 if sim > best_global_sim:
                     best_global_sim = sim
                     best_global_id = profile_id
@@ -368,7 +396,59 @@ class SpeakerIDService:
                     }
                 return {"speaker_id": best_global_id, "speaker_name": best_global_name, "similarity": best_global_sim}
 
-            return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0}
+            # Step 3: Local-only auto-enrollment as a new numbered speaker ("Speaker N")
+            # We must re-verify against the live profiles map under the lock to prevent
+            # race conditions from concurrent pipeline tasks.
+            with self.lock:
+                if meeting_id not in self.meeting_profiles:
+                    self.meeting_profiles[meeting_id] = {}
+                meeting_profiles = self.meeting_profiles[meeting_id]
+
+                # Check if a concurrent thread enrolled this voice during our async window
+                best_live_id = None
+                best_live_name = None
+                best_live_sim = 0.0
+                for p_id, data in meeting_profiles.items():
+                    sim = self.compute_similarity(normalized_emb, data["embedding"])
+                    if sim > best_live_sim:
+                        best_live_sim = sim
+                        best_live_id = p_id
+                        best_live_name = data["name"]
+
+                if best_live_sim >= threshold:
+                    print(
+                        f"SpeakerIDService: Concurrent task already enrolled this voice as "
+                        f"'{best_live_name}' (ID={best_live_id}, sim={best_live_sim:.3f}). "
+                        f"Matching instead of duplicate auto-enrolling."
+                    )
+                    return {"speaker_id": best_live_id, "speaker_name": best_live_name, "similarity": best_live_sim}
+
+                # Count existing Speaker N names
+                existing_numbers = []
+                for data in meeting_profiles.values():
+                    name = data["name"]
+                    if name.startswith("Speaker "):
+                        try:
+                            num = int(name.split(" ")[1])
+                            existing_numbers.append(num)
+                        except (ValueError, IndexError):
+                            pass
+                
+                next_number = 1
+                if existing_numbers:
+                    next_number = max(existing_numbers) + 1
+                    
+                speaker_name = f"Speaker {next_number}"
+                profile_id = str(uuid.uuid4())
+                
+                # Register in local map only (NOT global, NOT database)
+                meeting_profiles[profile_id] = {
+                    "name": speaker_name,
+                    "embedding": normalized_emb
+                }
+                print(f"SpeakerIDService: Auto-enrolled unidentified speaker locally as '{speaker_name}' (ID={profile_id}) for meeting {meeting_id}.")
+                
+            return {"speaker_id": profile_id, "speaker_name": speaker_name, "similarity": 0.0}
         except Exception as e:
             print(f"SpeakerIDService Error: Identification failed: {e}")
             return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0, "error": str(e)}
