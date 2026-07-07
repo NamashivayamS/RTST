@@ -12,6 +12,11 @@ from database.queries import (
     update_global_speaker_name,
     delete_global_speaker_profile,
 )
+from config import (
+    SPEAKER_ID_LOCAL_THRESHOLD,
+    SPEAKER_ID_GLOBAL_THRESHOLD,
+    SPEAKER_ID_MIN_ENROLL_DURATION,
+)
 
 logger = logging.getLogger("ispeak.speaker_id")
 
@@ -111,6 +116,9 @@ class SpeakerIDService:
         # Load global profiles from DB compatible with active model/dimension
         self.global_profiles = load_global_speaker_profiles(self.model_name, self.emb_dim)
 
+        # Warm up/pre-load SpaCy NER pipeline at startup to avoid blocking the event loop on the first utterance
+        _get_nlp()
+
         self.lock = threading.Lock()
 
     # ──────────────────────────────────────────────────────────────────
@@ -156,12 +164,11 @@ class SpeakerIDService:
         if removed is not None:
             print(f"SpeakerIDService: Cleared {len(removed)} profile(s) for meeting {meeting_id}.")
 
-    def enroll_speaker(self, speaker_name: str, audio: np.ndarray, sample_rate: int, meeting_id: str) -> dict:
+    def enroll_speaker(self, speaker_name: str, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = SPEAKER_ID_LOCAL_THRESHOLD) -> dict:
         """
         Extract embedding and register it for `speaker_name` within `meeting_id`.
         Before minting a fresh UUID, checks if the voice matches an existing local
-        speaker (threshold >= 0.50) or global speaker (threshold >= 0.70) to prevent
-        duplicate enrollments and speaker identification flip-flopping.
+        speaker or global speaker to prevent duplicate enrollments.
         """
         try:
             new_emb = self.get_embedding(audio, sample_rate)
@@ -172,7 +179,7 @@ class SpeakerIDService:
             normalized_emb = new_emb / norm if norm > 0 else new_emb
 
             with self.lock:
-                # Tier A: Check local session profiles first (threshold >= 0.50)
+                # Tier A: Check local session profiles first
                 profiles = self._get_meeting_profiles(meeting_id)
                 best_local_id = None
                 best_local_name = None
@@ -184,7 +191,7 @@ class SpeakerIDService:
                         best_local_id = p_id
                         best_local_name = data["name"]
 
-                if best_local_sim >= 0.50:
+                if best_local_sim >= threshold:
                     print(
                         f"SpeakerIDService: Voice matches existing local profile "
                         f"'{best_local_name}' (ID={best_local_id}, sim={best_local_sim:.3f}). "
@@ -192,7 +199,7 @@ class SpeakerIDService:
                     )
                     return {"profile_id": best_local_id, "name": best_local_name}
 
-                # Tier B: Check global profiles next (threshold >= 0.70)
+                # Tier B: Check global profiles next
                 best_global_id = None
                 best_global_name = None
                 best_global_sim = 0.0
@@ -203,7 +210,7 @@ class SpeakerIDService:
                         best_global_id = p_id
                         best_global_name = data["name"]
 
-                if best_global_sim >= 0.70:
+                if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
                     print(
                         f"SpeakerIDService: Voice matches existing global profile "
                         f"'{best_global_name}' (ID={best_global_id}, sim={best_global_sim:.3f}). "
@@ -336,12 +343,12 @@ class SpeakerIDService:
             return 0.0
         return float(dot_prod / (norm1 * norm2))
 
-    def identify_speaker(self, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:
+    def identify_speaker(self, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = SPEAKER_ID_LOCAL_THRESHOLD) -> dict:
         """
         Identify speaker using a single lock acquisition to copy local and global snapshots.
         If the speaker remains unidentified after local/global checks, they are auto-enrolled
-        locally under an anonymous "Speaker N" profile. Includes atomic concurrency safeguards
-        and embedding normalization.
+        locally under an anonymous "Speaker N" profile only if the audio duration is long enough
+        (to prevent fragmentation on short, noisy utterances).
         """
         with self.lock:
             local_snapshot = dict(self.meeting_profiles.get(meeting_id, {}))
@@ -356,7 +363,7 @@ class SpeakerIDService:
             norm = np.linalg.norm(test_emb)
             normalized_emb = test_emb / norm if norm > 0 else test_emb
 
-            # Step 1: Match against local session profiles (low threshold: 0.5)
+            # Step 1: Match against local session profiles
             best_local_id = None
             best_local_name = "Unknown Speaker"
             best_local_sim = 0.0
@@ -371,7 +378,7 @@ class SpeakerIDService:
             if best_local_sim >= threshold:
                 return {"speaker_id": best_local_id, "speaker_name": best_local_name, "similarity": best_local_sim}
 
-            # Step 2: Match against global database profiles (strict threshold: 0.7)
+            # Step 2: Match against global database profiles
             best_global_id = None
             best_global_name = "Unknown Speaker"
             best_global_sim = 0.0
@@ -385,7 +392,7 @@ class SpeakerIDService:
                     best_global_name = data["name"]
                     best_global_emb = data["embedding"]
 
-            if best_global_sim >= 0.70:
+            if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
                 # Auto-enroll in the current local meeting session
                 with self.lock:
                     if meeting_id not in self.meeting_profiles:
@@ -396,7 +403,24 @@ class SpeakerIDService:
                     }
                 return {"speaker_id": best_global_id, "speaker_name": best_global_name, "similarity": best_global_sim}
 
+            # Log details about the best sub-threshold match
+            if best_local_sim > 0.0 or best_global_sim > 0.0:
+                print(
+                    f"SpeakerIDService: Match failed threshold. "
+                    f"Best local: '{best_local_name}' (sim={best_local_sim:.3f}, threshold={threshold:.2f}). "
+                    f"Best global: '{best_global_name}' (sim={best_global_sim:.3f}, threshold={SPEAKER_ID_GLOBAL_THRESHOLD:.2f})."
+                )
+
             # Step 3: Local-only auto-enrollment as a new numbered speaker ("Speaker N")
+            # We enforce a minimum duration gate to prevent noise/short clips from auto-enrolling new profiles.
+            duration_sec = len(audio) / sample_rate
+            if duration_sec < SPEAKER_ID_MIN_ENROLL_DURATION:
+                print(
+                    f"SpeakerIDService: Audio duration {duration_sec:.2f}s is below minimum auto-enroll "
+                    f"limit ({SPEAKER_ID_MIN_ENROLL_DURATION}s). Skipping registration of a new speaker."
+                )
+                return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": max(best_local_sim, best_global_sim)}
+
             # We must re-verify against the live profiles map under the lock to prevent
             # race conditions from concurrent pipeline tasks.
             with self.lock:

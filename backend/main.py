@@ -438,6 +438,15 @@ class ConnectionState:
         return self._total - self._utt_start
 
 
+# Reference counting dictionary of active meeting IDs to support seamless WebSocket reconnects
+active_meeting_counts: dict[str, int] = {}
+
+async def schedule_delayed_cleanup(meeting_id: str, delay_sec: float = 45.0):
+    """Wait for delay_sec, and if meeting_id has no active connections, clear its profiles."""
+    await asyncio.sleep(delay_sec)
+    if meeting_id not in active_meeting_counts and router:
+        router.speaker_id_service.clear_meeting(meeting_id)
+
 # ── WebSocket endpoint ─────────────────────────────────────────────────────────
 @app.websocket("/ws/translate")
 async def websocket_translate(websocket: WebSocket):
@@ -451,16 +460,38 @@ async def websocket_translate(websocket: WebSocket):
     state = ConnectionState()
     loop  = asyncio.get_event_loop()
 
-    # ── Fix 5: create meeting at connect time (no race condition) ─────────────
+    # ── Fix 5: create/reuse meeting at connect time (no race condition) ───────
+    meeting_id_param = websocket.query_params.get("meeting_id")
+    is_valid_meeting = False
+    if meeting_id_param:
+        try:
+            uuid.UUID(meeting_id_param)
+            is_valid_meeting = True
+        except ValueError:
+            pass
+
     try:
-        state.meeting_id = await loop.run_in_executor(
-            None,
-            lambda: create_meeting(
-                title="Live Translation Session",
-                department_id=DEFAULT_DEPARTMENT_ID,
+        if is_valid_meeting:
+            state.meeting_id = meeting_id_param
+            logger.info("[WS] Reusing existing meeting_id: %s", state.meeting_id)
+        else:
+            state.meeting_id = await loop.run_in_executor(
+                None,
+                lambda: create_meeting(
+                    title="Live Translation Session",
+                    department_id=DEFAULT_DEPARTMENT_ID,
+                )
             )
-        )
-        logger.info("[WS] Meeting created for new connection: %s", state.meeting_id)
+            logger.info("[WS] Meeting created for new connection: %s", state.meeting_id)
+
+        # Increment active connection count
+        active_meeting_counts[state.meeting_id] = active_meeting_counts.get(state.meeting_id, 0) + 1
+        # Send meeting metadata to frontend
+        await manager.send_json(websocket, {
+            "type": "meeting_created",
+            "meeting_id": state.meeting_id,
+            "title": "Live Translation Session"
+        })
     except Exception:
         logger.exception("[WS] Failed to create meeting — DB may be down.")
         # Allow connection to proceed; DB writes will fail silently per utterance
@@ -673,8 +704,20 @@ async def websocket_translate(websocket: WebSocket):
         logger.exception("[WS] Unexpected error in receive loop.")
     finally:
         state.cancel_event.set()
-        if state.meeting_id and router:
-            router.speaker_id_service.clear_meeting(state.meeting_id)
+        # Wait for all background pipeline tasks to drain/complete before disconnect cleanup
+        drain_start = time.perf_counter()
+        while state.active_tasks > 0 and (time.perf_counter() - drain_start) < 10.0:
+            await asyncio.sleep(0.1)
+
+        if state.meeting_id:
+            # Decrement active connection count for this meeting
+            if state.meeting_id in active_meeting_counts:
+                active_meeting_counts[state.meeting_id] -= 1
+                if active_meeting_counts[state.meeting_id] <= 0:
+                    active_meeting_counts.pop(state.meeting_id, None)
+                    # Schedule delayed cleanup to allow reconnects without losing speaker profiles
+                    asyncio.create_task(schedule_delayed_cleanup(state.meeting_id, delay_sec=45.0))
+
         manager.disconnect(websocket)
 
 
@@ -739,31 +782,58 @@ async def _run_pipeline(
         # ── Speaker ID: auto-enroll from self-intro, else identify ─────────────
         speaker_id = "unknown"
         speaker_label = "Unknown Speaker"
+        speaker_id_start = time.perf_counter()
+        ner_ms = 0.0
+        executor_wait_ms = 0.0
+        inner_id_ms = 0.0
         try:
             speaker_text = result.get("cleaned_text", result.get("raw_text", ""))
+            
+            ner_start = time.perf_counter()
             intro_name = router.speaker_id_service.extract_name_from_text(speaker_text)
+            ner_ms = (time.perf_counter() - ner_start) * 1000
+            
             pl_logger.info(
-                "[SpeakerID] text='%s' → extracted='%s'",
-                speaker_text[:80], intro_name
+                "[SpeakerID] text='%s' → extracted='%s' (NER=%.1fms)",
+                speaker_text[:80], intro_name, ner_ms
             )
+            
             if intro_name:
-                enroll_res = await loop.run_in_executor(
-                    None,
-                    lambda: router.speaker_id_service.enroll_speaker(
+                dispatch_time = time.perf_counter()
+                def _run_enroll():
+                    exec_start = time.perf_counter()
+                    res = router.speaker_id_service.enroll_speaker(
                         intro_name, audio, SAMPLE_RATE, state.meeting_id
                     )
+                    exec_end = time.perf_counter()
+                    return res, exec_start, exec_end
+
+                enroll_res, exec_start, exec_end = await loop.run_in_executor(
+                    None, _run_enroll
                 )
+                executor_wait_ms = (exec_start - dispatch_time) * 1000
+                inner_id_ms = (exec_end - exec_start) * 1000
+
                 if enroll_res:
                     speaker_id = enroll_res.get("profile_id", "unknown")
                     speaker_label = enroll_res.get("name", "Unknown Speaker")
                     pl_logger.info("[SpeakerID] Enrolled '%s' (ID=%s) for meeting %s", speaker_label, speaker_id, state.meeting_id)
             else:
-                id_result = await loop.run_in_executor(
-                    None,
-                    lambda: router.speaker_id_service.identify_speaker(
+                dispatch_time = time.perf_counter()
+                def _run_identify():
+                    exec_start = time.perf_counter()
+                    res = router.speaker_id_service.identify_speaker(
                         audio, SAMPLE_RATE, state.meeting_id
                     )
+                    exec_end = time.perf_counter()
+                    return res, exec_start, exec_end
+
+                id_result, exec_start, exec_end = await loop.run_in_executor(
+                    None, _run_identify
                 )
+                executor_wait_ms = (exec_start - dispatch_time) * 1000
+                inner_id_ms = (exec_end - exec_start) * 1000
+
                 speaker_id = id_result.get("speaker_id", "unknown")
                 speaker_label = id_result.get("speaker_name", "Unknown Speaker")
                 pl_logger.info(
@@ -772,6 +842,11 @@ async def _run_pipeline(
                 )
         except Exception:
             pl_logger.exception("[SpeakerID] Failed — continuing without speaker label.")
+        speaker_id_time = time.perf_counter() - speaker_id_start
+        pl_logger.info(
+            "[SpeakerID] Timings Breakdown: NER=%.1fms | Executor Wait=%.1fms | Inner Execute=%.1fms | Total Wrapper=%.1fms",
+            ner_ms, executor_wait_ms, inner_id_ms, speaker_id_time * 1000
+        )
 
         # ── Language Switch Fallback Drop ──
         if state.detected_language_lock:
@@ -852,16 +927,21 @@ async def _run_pipeline(
                 lang_prob, avg_logprob
             )
 
-        total_time = result.get("stt_time", 0) + trans_time
+        total_time = result.get("stt_time", 0) + speaker_id_time + trans_time
 
         pl_logger.info(
-            "[Pipeline] %s → %s | '%s' → '%s' | STT=%.0fms TRANS=%.0fms TOTAL=%.0fms",
+            "[Pipeline] %s → %s | '%s' → '%s' | STT=%.0fms (tamil_reroute=%s, retry=%s) | SPEAKER_ID=%.0fms | TRANS=%.0fms (window_used=%s) | TOTAL=%.0fms | stage_timings=%s",
             src_lang, tgt_indic,
             result.get("raw_text", "")[:60],
             draft_refined[:60],
             result.get("stt_time", 0) * 1000,
+            result.get("tamil_rerouted", False),
+            result.get("retry_fired", False),
+            speaker_id_time * 1000,
             trans_time * 1000,
+            window_used,
             total_time * 1000,
+            result.get("stage_timings", {}),
         )
 
         if window_used:
@@ -988,7 +1068,8 @@ async def _run_pipeline(
 
     finally:
         state.active_tasks = max(0, state.active_tasks - 1)
-        if state.pending_utterance is not None:
+        # Only launch the next pending utterance if the session is not cancelled/disconnected
+        if state.pending_utterance is not None and not state.cancel_event.is_set():
             next_utt               = state.pending_utterance
             state.pending_utterance = None
             state.active_tasks     += 1

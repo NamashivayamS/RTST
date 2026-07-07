@@ -429,6 +429,9 @@ class RouterService:
                 "total_time": total_time,
                 "language_prob": stt_result.get("language_prob", 0.0),
                 "avg_logprob": stt_result.get("avg_logprob", -1.0),
+                "tamil_rerouted": stt_result.get("tamil_rerouted", False),
+                "retry_fired": stt_result.get("retry_fired", False),
+                "stage_timings": stt_result.get("stage_timings", {"primary_pass_ms": 0, "tamil_reroute_ms": 0, "retry_pass_ms": 0}),
             }
 
         
@@ -714,6 +717,8 @@ class RouterService:
         return {
             "raw_text": "", "cleaned_text": "", "punctuated_text": "",
             "src_lang": "", "language_prob": 0.0, "avg_logprob": -1.0,
+            "tamil_rerouted": False, "retry_fired": False,
+            "stage_timings": {"primary_pass_ms": 0, "tamil_reroute_ms": 0, "retry_pass_ms": 0},
         }
 
 

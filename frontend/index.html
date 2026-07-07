@@ -14,6 +14,7 @@
     <div class="app-container hide-left hide-right">
         <!-- LEFT SIDEBAR -->
         <aside class="sidebar">
+            <button class="close-sidebar-btn" onclick="document.querySelector('.app-container').classList.add('hide-left')">&times;</button>
             <div class="brand">
                 <i class="fa-solid fa-globe"></i>
                 <div>
@@ -38,7 +39,7 @@
                 <div class="meeting-list">
                     <div class="meeting-item active">
                         <div class="meeting-info">
-                            <h4>Product Strategy Meeting</h4>
+                            <h4 id="sidebarMeetingTitle">Product Strategy Meeting</h4>
                             <p>Live Session</p>
                         </div>
                         <span class="badge-live">LIVE</span>
@@ -59,9 +60,9 @@
                         <div class="avatar"><i class="fa-solid fa-user"></i></div>
                     </div>
                     <div class="meeting-meta">
-                        <h2>Product Strategy Meeting <span class="badge-live sm">LIVE</span> <span
+                        <h2 id="meetingTitle">Product Strategy Meeting <span class="badge-live sm">LIVE</span> <span
                                 id="timer">00:00:00</span></h2>
-                        <p>1 Speaker | <span id="hdrSourceLang">English</span> <i class="fa-solid fa-arrow-right"></i>
+                        <p><span id="speakerCount">1</span> Speaker(s) | <span id="hdrSourceLang">English</span> <i class="fa-solid fa-arrow-right"></i>
                             <span id="hdrTargetLang">Tamil</span>
                         </p>
                     </div>
@@ -171,6 +172,7 @@
 
         <!-- RIGHT SIDEBAR (ANALYTICS) -->
         <aside class="right-sidebar">
+            <button class="close-sidebar-btn" onclick="document.querySelector('.app-container').classList.add('hide-right')">&times;</button>
             <div class="panel">
                 <div class="panel-header">
                     <h3>MEETING ANALYTICS</h3>

@@ -15,6 +15,10 @@ let latencies = [];
 let fullTranscriptText = "";
 let currentLiveCard = null;
 
+// Reconnect/Session persistence state
+let currentMeetingId = null;
+let wasRecordingBeforeDisconnect = false;
+
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const micBtn = document.getElementById('micBtn');
 const micStatusText = document.getElementById('micStatusText');
@@ -178,7 +182,10 @@ function connectWebSocket() {
     // Token is injected into the HTML by the server at serve-time.
     // It rotates on every server restart and never appears in source code.
     const TOKEN = window.__WS_TOKEN__ || "";
-    const wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
+    let wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
+    if (currentMeetingId) {
+        wsUrl += `&meeting_id=${currentMeetingId}`;
+    }
 
     ws = new WebSocket(wsUrl);
 
@@ -193,6 +200,13 @@ function connectWebSocket() {
         dbStatusText.innerText = 'Ready to sync';
         dbStatusEl.className = 'db-status';
         sendConfig();
+
+        if (wasRecordingBeforeDisconnect) {
+            wasRecordingBeforeDisconnect = false;
+            setTimeout(() => {
+                if (!isRecording) startRecording();
+            }, 300);
+        }
     };
 
     ws.onmessage = (event) => {
@@ -200,7 +214,18 @@ function connectWebSocket() {
         let data;
         try { data = JSON.parse(event.data); } catch { return; }
 
-        if (data.type === 'subtitle') handleSubtitle(data);
+        if (data.type === 'meeting_created') {
+            currentMeetingId = data.meeting_id;
+            const titleEl = document.getElementById('meetingTitle');
+            const sidebarTitleEl = document.getElementById('sidebarMeetingTitle');
+            if (titleEl && data.title) {
+                titleEl.innerHTML = `${data.title} <span class="badge-live sm">LIVE</span> <span id="timer">${timerDisplay.innerText}</span>`;
+            }
+            if (sidebarTitleEl && data.title) {
+                sidebarTitleEl.innerText = data.title;
+            }
+        }
+        else if (data.type === 'subtitle') handleSubtitle(data);
         else if (data.type === 'subtitle_update') handleSubtitleUpdate(data);
         else if (data.type === 'done') handleDone(data);
         else if (data.type === 'speaker_renamed') handleSpeakerRenamed(data);
@@ -215,7 +240,13 @@ function connectWebSocket() {
             dashWsDot.style.boxShadow = '0 0 8px rgba(239, 68, 68, 0.6)';
         }
         if (dashWsText) dashWsText.innerText = 'Disconnected';
-        if (isRecording) stopRecording();
+        
+        if (isRecording) {
+            wasRecordingBeforeDisconnect = true;
+            stopRecording();
+        } else {
+            wasRecordingBeforeDisconnect = false;
+        }
 
         // 4003 = auth rejected (stale token after server restart).
         // Retrying with the same cached token is futile — reload the page
@@ -253,6 +284,18 @@ function sendConfig() {
 sourceLangSelect.addEventListener('change', sendConfig);
 targetLangSelect.addEventListener('change', sendConfig);
 envSelect.addEventListener('change', sendConfig);
+
+// ── Speaker count helper ──────────────────────────────────────────────────────
+function updateSpeakerCount() {
+    const countEl = document.getElementById('speakerCount');
+    if (!countEl) return;
+    const uniqueSpeakers = new Set();
+    document.querySelectorAll('.t-card').forEach(card => {
+        const spkId = card.dataset.speakerId;
+        if (spkId) uniqueSpeakers.add(spkId);
+    });
+    countEl.innerText = uniqueSpeakers.size || 1;
+}
 
 // ── Transcript cards ───────────────────────────────────────────────────────────
 function handleSubtitle(data) {
@@ -340,6 +383,8 @@ function handleSubtitle(data) {
         if (data.total_time_ms) currentLiveCard.querySelector('.metric-total').innerText = data.total_time_ms + 'ms';
     }
 
+    updateSpeakerCount();
+
     if (autoScrollToggle.checked) transcriptArea.scrollTop = transcriptArea.scrollHeight;
 }
 
@@ -404,6 +449,7 @@ function handleDone(data) {
     }, 2000);
 
     currentLiveCard = null;
+    updateSpeakerCount();
 }
 
 /**
@@ -433,6 +479,7 @@ function handleSpeakerRenamed(data) {
             }
         }
     });
+    updateSpeakerCount();
 }
 
 /**
@@ -463,6 +510,7 @@ function handleSpeakersMerged(data) {
             }
         }
     });
+    updateSpeakerCount();
 }
 
 // ── Recording ─────────────────────────────────────────────────────────────────

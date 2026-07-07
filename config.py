@@ -44,6 +44,11 @@ VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 # not between normal sentence pauses within a single speaker's turn.
 TURN_TAKING_SILENCE_SEC = 2.0
 
+# ── Speaker Identification ────────────────────────────────────────────────────
+SPEAKER_ID_LOCAL_THRESHOLD     = 0.50  # Match threshold in current meeting session
+SPEAKER_ID_GLOBAL_THRESHOLD    = 0.70  # Strict threshold for global profile database
+SPEAKER_ID_MIN_ENROLL_DURATION = 3.0   # Min audio duration (sec) to auto-enroll a new speaker
+
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95
 STT_LANG_CONFIDENCE_FLOOR  = 0.70

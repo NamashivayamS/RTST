@@ -610,3 +610,180 @@ canvas#waveform {
     color: var(--border-subtle);
     opacity: 0.4;
 }
+
+/* ── Mobile Responsiveness Rules ────────────────────────────────────────── */
+
+.close-sidebar-btn {
+    display: none;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 28px;
+    cursor: pointer;
+    line-height: 1;
+    transition: color 0.2s;
+}
+.close-sidebar-btn:hover {
+    color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+    .close-sidebar-btn {
+        display: block;
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 1010;
+    }
+    
+    .app-container {
+        grid-template-columns: 1fr !important; /* Hide sidebar columns from grid layout */
+    }
+    
+    .sidebar {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 280px;
+        height: 100vh;
+        z-index: 1000;
+        transform: translateX(0);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 10px 0 30px rgba(0, 0, 0, 0.6);
+        background-color: var(--bg-surface);
+        border-right: 1px solid var(--border-subtle);
+    }
+    .app-container.hide-left .sidebar {
+        transform: translateX(-100%);
+        opacity: 1; /* override opacity transition for drawer effect */
+    }
+    
+    .right-sidebar {
+        position: fixed;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 280px;
+        height: 100vh;
+        z-index: 1000;
+        transform: translateX(0);
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.6);
+        background-color: var(--bg-surface);
+        border-left: 1px solid var(--border-subtle);
+    }
+    .app-container.hide-right .right-sidebar {
+        transform: translateX(100%);
+        opacity: 1;
+    }
+}
+
+@media (max-width: 600px) {
+    .top-header {
+        height: 64px;
+        padding: 0 16px;
+    }
+    .meeting-meta h2 {
+        font-size: 14px;
+        gap: 6px;
+    }
+    .meeting-meta p {
+        font-size: 10px;
+        margin-top: 2px;
+    }
+    .secure-badge {
+        display: none !important; /* Hide to save space on small screens */
+    }
+    #dashWsText {
+        display: none; /* Hide disconnected status text, keep dot only */
+    }
+    
+    .transcript-toolbar {
+        padding: 10px 16px;
+    }
+    
+    .transcript-area {
+        padding: 16px 16px 210px 16px; /* larger bottom padding to fit taller dock */
+        gap: 16px;
+    }
+    
+    .transcript-area.split-view .t-content {
+        grid-template-columns: 1fr !important; /* disable side-by-side split view on mobile */
+        gap: 12px 0;
+    }
+    .transcript-area.split-view .t-source {
+        padding-right: 0 !important;
+        border-right: none !important;
+        border-bottom: 1px solid var(--border-subtle);
+        padding-bottom: 12px;
+    }
+    
+    .t-card {
+        padding: 14px;
+        gap: 10px;
+        border-radius: 10px;
+    }
+    .t-source {
+        font-size: 14px;
+        margin-bottom: 8px;
+    }
+    .t-target {
+        font-size: 16px;
+    }
+    
+    .control-dock {
+        height: auto;
+        padding: 12px 16px 16px 16px;
+        flex-direction: column;
+        gap: 12px;
+        background: rgba(11, 15, 25, 0.98);
+    }
+    
+    .dock-center {
+        order: 1;
+        width: 100%;
+        gap: 6px;
+    }
+    .audio-levels {
+        width: 100%;
+        max-width: 320px;
+        padding: 4px 10px;
+    }
+    canvas#waveform {
+        height: 32px;
+    }
+    .mic-btn {
+        width: 52px;
+        height: 52px;
+        font-size: 18px;
+    }
+    
+    .dock-left, .dock-right {
+        order: 2;
+        width: 100%;
+        flex: none;
+        display: flex;
+        gap: 8px;
+    }
+    .dock-left {
+        justify-content: space-between;
+    }
+    .dock-right {
+        justify-content: space-between;
+    }
+    
+    .lang-selector, .env-selector {
+        flex: 1;
+    }
+    .lang-selector select, .env-selector select {
+        width: 100%;
+        padding: 6px 10px;
+        font-size: 12px;
+        height: 36px;
+    }
+    .lang-selector span, .env-selector span {
+        font-size: 9px;
+    }
+}
+

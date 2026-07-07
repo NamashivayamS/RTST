@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import re
 import numpy as np
+import time
 from models.whisper_model import whisper_model, tamil_whisper_model
 
 
@@ -127,6 +128,12 @@ class STTService:
                 "segments":        list,
             }
         """
+        # ── Per-stage timing instrumentation ────────────────────────────────
+        _primary_start = time.perf_counter()
+        tamil_rerouted = False
+        retry_fired = False
+        stage_timings = {"primary_pass_ms": 0, "tamil_reroute_ms": 0, "retry_pass_ms": 0}
+
         # ── Tamil-First Bypass (Priority 2) ──
         if force_language == "ta" and self.tamil_model is not None:
             print("[STT] Tamil-First Mode active: Bypassing primary model directly to Tamil model.")
@@ -141,6 +148,7 @@ class STTService:
             )
             segments = list(segments_gen)
             detected_lang = "ta"
+            stage_timings["primary_pass_ms"] = int((time.perf_counter() - _primary_start) * 1000)
         else:
             segments_gen, info = self.model.transcribe(
                 audio_input,
@@ -154,11 +162,14 @@ class STTService:
 
             segments = list(segments_gen)
             detected_lang = info.language
+            stage_timings["primary_pass_ms"] = int((time.perf_counter() - _primary_start) * 1000)
 
             # ── Dual-Model Routing ────────────────────────────────────────────────
             # If the primary model detects Tamil, re-run with the specialized Tamil model.
             if detected_lang == "ta" and self.tamil_model is not None:
                 print("[STT] Primary model detected Tamil. Re-routing through specialized Tamil model...")
+                _reroute_start = time.perf_counter()
+                tamil_rerouted = True
                 segments_gen_ta, info_ta = self.tamil_model.transcribe(
                     audio_input,
                     beam_size=self.beam_size_tamil,
@@ -171,6 +182,7 @@ class STTService:
                 segments = list(segments_gen_ta)
                 info = info_ta
                 detected_lang = "ta"
+                stage_timings["tamil_reroute_ms"] = int((time.perf_counter() - _reroute_start) * 1000)
 
         # ── Quality assessment ─────────────────────────────────────────────────
         quality = self._assess_segment_quality(segments)
@@ -178,13 +190,15 @@ class STTService:
         if quality["action"] == "reject":
             # Hallucination detected — treat as silence, don't retry
             print(f"[STT] Rejected: {quality['reason']}")
-            return self._empty("", info, silence=True)
+            return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         if quality["action"] == "retry":
             print(
                 f"[STT] Running retry pass "
                 f"(beam_size={RETRY_BEAM_SIZE}, temperature=0.2)"
             )
+            _retry_start = time.perf_counter()
+            retry_fired = True
             
             retry_model = self.tamil_model if (detected_lang == "ta" and self.tamil_model is not None) else self.model
             retry_lang_arg = "ta" if retry_model == self.tamil_model else language
@@ -207,11 +221,12 @@ class STTService:
             )
             retry_segments = list(retry_gen)
             retry_quality  = self._assess_segment_quality(retry_segments)
+            stage_timings["retry_pass_ms"] = int((time.perf_counter() - _retry_start) * 1000)
 
             if retry_quality["action"] == "reject":
                 # Retry also hallucinated — discard
                 print("[STT] Retry also hallucinated — discarding")
-                return self._empty("", info, silence=True)
+                return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
             if retry_quality["avg_logprob"] > quality["avg_logprob"]:
                 print(
@@ -233,7 +248,7 @@ class STTService:
         # Whisper reports no_speech_prob per segment. If ALL segments are
         # low-confidence or the overall frame is silent, skip processing.
         if not segments:
-            return self._empty("", info, silence=True)
+            return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         avg_no_speech = sum(
             getattr(s, "no_speech_prob", 0.0) for s in segments
@@ -242,7 +257,7 @@ class STTService:
         threshold = no_speech_threshold if no_speech_threshold is not None else self.NO_SPEECH_THRESHOLD
         if avg_no_speech > threshold:
             print(f"[STT] Silence detected (no_speech_prob={avg_no_speech:.2f} > {threshold:.2f}) — skipping.")
-            return self._empty("", info, silence=True)
+            return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         # ── Assemble full text ─────────────────────────────────────────────
         full_text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -256,12 +271,12 @@ class STTService:
             unique_ratio = len(set(w.lower().strip('.,!?') for w in words)) / len(words)
             if unique_ratio < 0.4:
                 print(f"[STT] Repetition hallucination: '{full_text[:50]}...'")
-                return self._empty(full_text, info, silence=True)
+                return self._empty(full_text, info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         # ── Hallucination filter ───────────────────────────────────────────
         if _is_hallucination(full_text):
             print(f"[STT] Hallucination filtered: '{full_text}'")
-            return self._empty(full_text, info, silence=True)
+            return self._empty(full_text, info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         # Don't overwrite detected_lang if Tamil-first bypass was used —
         # the fine-tuned model's info.language is unreliable (can return 'ml', 'kn').
@@ -314,7 +329,7 @@ class STTService:
                 # Re-run hallucination check on new transcription
                 full_text = " ".join(seg.text.strip() for seg in segments).strip()
                 if _is_hallucination(full_text):
-                    return self._empty(full_text, info, silence=True)
+                    return self._empty(full_text, info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
             else:
                 # High confidence wrong language — just fall back silently
                 print(f"[STT] Unsupported language '{detected_lang}' — falling back to 'en'")
@@ -361,6 +376,9 @@ class STTService:
             "indictrans_lang": indictrans_lang,
             "segments":        segments,
             "avg_logprob":     quality.get("avg_logprob", -1.0),
+            "tamil_rerouted":  tamil_rerouted,
+            "retry_fired":     retry_fired,
+            "stage_timings":   stage_timings,
         }
 
     def transcribe_to_text(self, audio_input, language: str | None = None) -> str:
@@ -462,7 +480,9 @@ class STTService:
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _empty(text: str, info, silence: bool) -> dict:
+    def _empty(text: str, info, silence: bool, tamil_rerouted: bool = False, retry_fired: bool = False, stage_timings: dict | None = None) -> dict:
+        if stage_timings is None:
+            stage_timings = {"primary_pass_ms": 0, "tamil_reroute_ms": 0, "retry_pass_ms": 0}
         return {
             "text":            text,
             "language":        info.language,
@@ -472,6 +492,9 @@ class STTService:
             "indictrans_lang": None,
             "segments":        [],
             "avg_logprob":     -1.0,
+            "tamil_rerouted":  tamil_rerouted,
+            "retry_fired":     retry_fired,
+            "stage_timings":   stage_timings,
         }
 
 
@@ -487,3 +510,6 @@ if __name__ == "__main__":
     print(f"Tanglish  : {result['is_tanglish']}")
     print(f"Token     : {result['indictrans_lang']}")
     print(f"Text      : {result['text']}")
+    print(f"Rerouted  : {result.get('tamil_rerouted')}")
+    print(f"Retry     : {result.get('retry_fired')}")
+    print(f"Timings   : {result.get('stage_timings')}")
