@@ -36,18 +36,19 @@ VAD_MAX_SPEECH_SEC   = 7.0    # force-fire after this many seconds of continuous
 VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 
 # ── Turn-taking silence threshold ─────────────────────────────────────────────
-# This is SEPARATE from VAD_SILENCE_SEC which controls when an utterance fires.
 # TURN_TAKING_SILENCE_SEC controls when we assume the *speaker has changed*:
 #   - language lock is cleared (next speaker's language re-detected cleanly)
 #   - translation window is cleared (no cross-speaker context bleed)
-# Must be longer than VAD_SILENCE_SEC so it only triggers between turns,
-# not between normal sentence pauses within a single speaker's turn.
+
 TURN_TAKING_SILENCE_SEC = 2.0
 
 # ── Speaker Identification ────────────────────────────────────────────────────
 SPEAKER_ID_LOCAL_THRESHOLD     = 0.50  # Match threshold in current meeting session
 SPEAKER_ID_GLOBAL_THRESHOLD    = 0.70  # Strict threshold for global profile database
+SPEAKER_ID_INTRO_THRESHOLD     = 0.52  # Lenient threshold used only during self-introduction name matching
 SPEAKER_ID_MIN_ENROLL_DURATION = 3.0   # Min audio duration (sec) to auto-enroll a new speaker
+SPEAKER_ID_DEVICE              = os.environ.get("SPEAKER_ID_DEVICE", "auto")  # "auto" | "cpu" | "cuda"
+
 
 # ── STT thresholds ────────────────────────────────────────────────────────────
 STT_NO_SPEECH_THRESHOLD    = 0.95

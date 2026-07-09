@@ -20,6 +20,8 @@ PROPER_NOUN_CORRECTIONS = {
     "Namishwamy": "Namashivayam",
     "Namah Namashivayam": "Namashivayam",
     "Namashwarayam": "Namashivayam",
+    "Nameshwarayam": "Namashivayam",
+    "Namesh warayam": "Namashivayam",
     "Namashwaram": "Namashivayam",
     "Namashwaramy": "Namashivayam",
     "Namashkayam": "Namashivayam",

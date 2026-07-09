@@ -15,7 +15,9 @@ from database.queries import (
 from config import (
     SPEAKER_ID_LOCAL_THRESHOLD,
     SPEAKER_ID_GLOBAL_THRESHOLD,
+    SPEAKER_ID_INTRO_THRESHOLD,
     SPEAKER_ID_MIN_ENROLL_DURATION,
+    SPEAKER_ID_DEVICE,
 )
 
 logger = logging.getLogger("ispeak.speaker_id")
@@ -94,7 +96,12 @@ class SpeakerIDService:
     """
 
     def __init__(self, model_name: str = "speechbrain/spkrec-ecapa-voxceleb", device: str = None):
-        self.device = device if device is not None else "cpu"
+        if device is not None:
+            self.device = device
+        elif SPEAKER_ID_DEVICE == "auto":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = SPEAKER_ID_DEVICE
 
         print(f"SpeakerIDService: Loading model '{model_name}' on {self.device}...")
         self.classifier = EncoderClassifier.from_hparams(
@@ -142,9 +149,13 @@ class SpeakerIDService:
             audio_tensor = audio_tensor.unsqueeze(0)
         audio_tensor = audio_tensor.to(self.device)
 
+        import time
+        t0 = time.perf_counter()
         with torch.no_grad():
             embeddings = self.classifier.encode_batch(audio_tensor)
             emb_numpy = embeddings.squeeze().cpu().numpy()
+        inf_time_ms = (time.perf_counter() - t0) * 1000
+        logger.info("[SpeakerID] Inner model inference time: %.1fms on %s", inf_time_ms, self.device)
 
         return emb_numpy
 
@@ -157,6 +168,19 @@ class SpeakerIDService:
             self.meeting_profiles[meeting_id] = {}
         return self.meeting_profiles[meeting_id]
 
+    def _best_match(self, emb: np.ndarray, candidates: dict) -> tuple[str | None, str | None, float]:
+        """Iterate over candidate profiles to find the best cosine similarity match."""
+        best_id = None
+        best_name = None
+        best_sim = 0.0
+        for p_id, data in candidates.items():
+            sim = self.compute_similarity(emb, data["embedding"])
+            if sim > best_sim:
+                best_sim = sim
+                best_id = p_id
+                best_name = data["name"]
+        return best_id, best_name, best_sim
+
     def clear_meeting(self, meeting_id: str):
         """Call when a meeting/connection ends — frees enrolled voiceprints."""
         with self.lock:
@@ -168,7 +192,8 @@ class SpeakerIDService:
         """
         Extract embedding and register it for `speaker_name` within `meeting_id`.
         Before minting a fresh UUID, checks if the voice matches an existing local
-        speaker or global speaker to prevent duplicate enrollments.
+        speaker or global speaker (with lenient intro threshold or strict passive threshold)
+        to prevent duplicate enrollments.
         """
         try:
             new_emb = self.get_embedding(audio, sample_rate)
@@ -178,71 +203,132 @@ class SpeakerIDService:
             norm = np.linalg.norm(new_emb)
             normalized_emb = new_emb / norm if norm > 0 else new_emb
 
+            promote_to_db = False
+            update_in_db = False
+            remap_local_key = None       # (old_temp_id, new_id) if a swap is needed
+            db_embedding = None
+            result_id = None
+            result_name = None
+
             with self.lock:
-                # Tier A: Check local session profiles first
                 profiles = self._get_meeting_profiles(meeting_id)
-                best_local_id = None
-                best_local_name = None
-                best_local_sim = 0.0
-                for p_id, data in profiles.items():
-                    sim = self.compute_similarity(normalized_emb, data["embedding"])
-                    if sim > best_local_sim:
-                        best_local_sim = sim
-                        best_local_id = p_id
-                        best_local_name = data["name"]
 
+                # ── Tier A: existing local match ─────────────────────────────
+                best_local_id, best_local_name, best_local_sim = self._best_match(normalized_emb, profiles)
+
+                # ── Tier A2: name-filtered global search ──────────────────────
+                name_matched_candidates = {
+                    pid: data for pid, data in self.global_profiles.items()
+                    if data["name"].strip().lower() == speaker_name.strip().lower()
+                }
+                best_intro_id, best_intro_name, best_intro_sim = self._best_match(
+                    normalized_emb, name_matched_candidates
+                ) if name_matched_candidates else (None, None, 0.0)
+
+                # ── Decision Tree ────────────────────────────────────────────
                 if best_local_sim >= threshold:
-                    print(
-                        f"SpeakerIDService: Voice matches existing local profile "
-                        f"'{best_local_name}' (ID={best_local_id}, sim={best_local_sim:.3f}). "
-                        f"Skipping duplicate enrollment."
+                    if best_local_name.startswith("Speaker ") and not speaker_name.startswith("Speaker "):
+                        if best_intro_sim >= SPEAKER_ID_INTRO_THRESHOLD:
+                            # Case 1: Name + voice agree on an existing global identity
+                            remap_local_key = (best_local_id, best_intro_id)
+                            profiles[best_intro_id] = {
+                                "name": speaker_name,
+                                "embedding": profiles[best_local_id]["embedding"]
+                            }
+                            del profiles[best_local_id]
+                            result_id, result_name = best_intro_id, speaker_name
+                            
+                            old_name = self.global_profiles[best_intro_id]["name"]
+                            if old_name != speaker_name:
+                                self.global_profiles[best_intro_id]["name"] = speaker_name
+                                update_in_db = True
+                        else:
+                            # Case 2: Spoken name mismatch/nickname, check for strict global voice match
+                            best_global_id, best_global_name, best_global_sim = self._best_match(
+                                normalized_emb, self.global_profiles
+                            )
+                            if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
+                                # Voice matches a global profile strictly (e.g. 0.85), trust database name
+                                remap_local_key = (best_local_id, best_global_id)
+                                profiles[best_global_id] = {
+                                    "name": best_global_name,
+                                    "embedding": profiles[best_local_id]["embedding"]
+                                }
+                                del profiles[best_local_id]
+                                result_id, result_name = best_global_id, best_global_name
+                            else:
+                                # Case 3: Genuinely new identity; rename and promote local temp profile
+                                profiles[best_local_id]["name"] = speaker_name
+                                result_id, result_name = best_local_id, speaker_name
+                                if best_local_id not in self.global_profiles:
+                                    self.global_profiles[best_local_id] = {
+                                        "name": speaker_name,
+                                        "embedding": profiles[best_local_id]["embedding"]
+                                    }
+                                    promote_to_db = True
+                                    db_embedding = profiles[best_local_id]["embedding"]
+                                else:
+                                    old_name = self.global_profiles[best_local_id]["name"]
+                                    if old_name != speaker_name:
+                                        self.global_profiles[best_local_id]["name"] = speaker_name
+                                        update_in_db = True
+                    else:
+                        # Already enrolled under a specific name. Log mismatch if names differ.
+                        if best_local_name != speaker_name and not best_local_name.startswith("Speaker "):
+                            logger.warning(
+                                "[SpeakerID] Mismatch in enroll_speaker: voice matched local profile '%s' (sim=%.3f), "
+                                "but spoken name was '%s'. Keeping existing name.",
+                                best_local_name, best_local_sim, speaker_name
+                            )
+                        return {
+                            "profile_id": best_local_id,
+                            "name": best_local_name,
+                            "was_merged": False,
+                            "merged_from_id": None
+                        }
+
+                elif best_intro_sim >= SPEAKER_ID_INTRO_THRESHOLD:
+                    # Matches global profile directly by name + voice (no local anonymous profile existed yet)
+                    profiles[best_intro_id] = {"name": speaker_name, "embedding": normalized_emb}
+                    result_id, result_name = best_intro_id, speaker_name
+                    old_name = self.global_profiles[best_intro_id]["name"]
+                    if old_name != speaker_name:
+                        self.global_profiles[best_intro_id]["name"] = speaker_name
+                        update_in_db = True
+
+                else:
+                    # Tier B: Strict, unfiltered global voice match (name-independent safety net)
+                    best_global_id, best_global_name, best_global_sim = self._best_match(
+                        normalized_emb, self.global_profiles
                     )
-                    return {"profile_id": best_local_id, "name": best_local_name}
+                    if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
+                        # Voice matches a global profile strictly (e.g. 0.85), trust database name
+                        profiles[best_global_id] = {"name": best_global_name, "embedding": normalized_emb}
+                        result_id, result_name = best_global_id, best_global_name
+                    else:
+                        # Tier C: Genuinely new speaker
+                        # No concurrent re-check needed — entire method runs under one uninterrupted lock
+                        profile_id = str(uuid.uuid4())
+                        profiles[profile_id] = {"name": speaker_name, "embedding": normalized_emb}
+                        self.global_profiles[profile_id] = {"name": speaker_name, "embedding": normalized_emb}
+                        result_id, result_name = profile_id, speaker_name
+                        promote_to_db = True
+                        db_embedding = normalized_emb
 
-                # Tier B: Check global profiles next
-                best_global_id = None
-                best_global_name = None
-                best_global_sim = 0.0
-                for p_id, data in self.global_profiles.items():
-                    sim = self.compute_similarity(normalized_emb, data["embedding"])
-                    if sim > best_global_sim:
-                        best_global_sim = sim
-                        best_global_id = p_id
-                        best_global_name = data["name"]
+            # ── Database updates (Outside Lock) ─────────────────────────────
+            if promote_to_db:
+                save_global_speaker_profile(result_id, result_name, db_embedding, self.model_name, self.emb_dim)
+            elif update_in_db:
+                update_global_speaker_name(result_id, result_name)
 
-                if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
-                    print(
-                        f"SpeakerIDService: Voice matches existing global profile "
-                        f"'{best_global_name}' (ID={best_global_id}, sim={best_global_sim:.3f}). "
-                        f"Auto-enrolling in meeting {meeting_id} instead of minting a duplicate."
-                    )
-                    profiles[best_global_id] = {
-                        "name": best_global_name,
-                        "embedding": self.global_profiles[best_global_id]["embedding"]
-                    }
-                    return {"profile_id": best_global_id, "name": best_global_name}
-
-                # Tier C: Truly new speaker, proceed to mint fresh UUID
-                profile_id = str(uuid.uuid4())
-                profiles[profile_id] = {
-                    "name": speaker_name,
-                    "embedding": normalized_emb
-                }
-                self.global_profiles[profile_id] = {
-                    "name": speaker_name,
-                    "embedding": normalized_emb
-                }
-                print(f"SpeakerIDService: Enrolled new speaker '{speaker_name}' with ID {profile_id} for meeting {meeting_id}.")
-
-            # Persist to global database only if it's a brand new profile
-            save_global_speaker_profile(
-                profile_id, speaker_name, normalized_emb,
-                self.model_name, self.emb_dim
-            )
-
-            return {"profile_id": profile_id, "name": speaker_name}
+            return {
+                "profile_id": result_id,
+                "name": result_name,
+                "was_merged": remap_local_key is not None,
+                "merged_from_id": remap_local_key[0] if remap_local_key else None
+            }
         except Exception as e:
-            print(f"SpeakerIDService Error: Failed to enroll '{speaker_name}': {e}")
+            logger.exception("[SpeakerID] Failed to enroll '%s': %s", speaker_name, e)
             return {}
 
     def remove_speaker(self, profile_id: str, meeting_id: str) -> bool:
@@ -364,35 +450,16 @@ class SpeakerIDService:
             normalized_emb = test_emb / norm if norm > 0 else test_emb
 
             # Step 1: Match against local session profiles
-            best_local_id = None
-            best_local_name = "Unknown Speaker"
-            best_local_sim = 0.0
-            
-            for profile_id, data in local_snapshot.items():
-                sim = self.compute_similarity(normalized_emb, data["embedding"])
-                if sim > best_local_sim:
-                    best_local_sim = sim
-                    best_local_id = profile_id
-                    best_local_name = data["name"]
+            best_local_id, best_local_name, best_local_sim = self._best_match(normalized_emb, local_snapshot)
 
             if best_local_sim >= threshold:
                 return {"speaker_id": best_local_id, "speaker_name": best_local_name, "similarity": best_local_sim}
 
             # Step 2: Match against global database profiles
-            best_global_id = None
-            best_global_name = "Unknown Speaker"
-            best_global_sim = 0.0
-            best_global_emb = None
-            
-            for profile_id, data in global_snapshot.items():
-                sim = self.compute_similarity(normalized_emb, data["embedding"])
-                if sim > best_global_sim:
-                    best_global_sim = sim
-                    best_global_id = profile_id
-                    best_global_name = data["name"]
-                    best_global_emb = data["embedding"]
+            best_global_id, best_global_name, best_global_sim = self._best_match(normalized_emb, global_snapshot)
 
             if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
+                best_global_emb = global_snapshot[best_global_id]["embedding"]
                 # Auto-enroll in the current local meeting session
                 with self.lock:
                     if meeting_id not in self.meeting_profiles:
@@ -405,19 +472,22 @@ class SpeakerIDService:
 
             # Log details about the best sub-threshold match
             if best_local_sim > 0.0 or best_global_sim > 0.0:
-                print(
-                    f"SpeakerIDService: Match failed threshold. "
-                    f"Best local: '{best_local_name}' (sim={best_local_sim:.3f}, threshold={threshold:.2f}). "
-                    f"Best global: '{best_global_name}' (sim={best_global_sim:.3f}, threshold={SPEAKER_ID_GLOBAL_THRESHOLD:.2f})."
+                logger.info(
+                    "[SpeakerID] Match failed threshold. "
+                    "Best local: '%s' (sim=%.3f, threshold=%.2f). "
+                    "Best global: '%s' (sim=%.3f, threshold=%.2f).",
+                    best_local_name, best_local_sim, threshold,
+                    best_global_name, best_global_sim, SPEAKER_ID_GLOBAL_THRESHOLD
                 )
 
             # Step 3: Local-only auto-enrollment as a new numbered speaker ("Speaker N")
             # We enforce a minimum duration gate to prevent noise/short clips from auto-enrolling new profiles.
             duration_sec = len(audio) / sample_rate
             if duration_sec < SPEAKER_ID_MIN_ENROLL_DURATION:
-                print(
-                    f"SpeakerIDService: Audio duration {duration_sec:.2f}s is below minimum auto-enroll "
-                    f"limit ({SPEAKER_ID_MIN_ENROLL_DURATION}s). Skipping registration of a new speaker."
+                logger.info(
+                    "[SpeakerID] Audio duration %.2fs is below minimum auto-enroll "
+                    "limit (%.2fs). Skipping registration of a new speaker.",
+                    duration_sec, SPEAKER_ID_MIN_ENROLL_DURATION
                 )
                 return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": max(best_local_sim, best_global_sim)}
 
@@ -429,21 +499,13 @@ class SpeakerIDService:
                 meeting_profiles = self.meeting_profiles[meeting_id]
 
                 # Check if a concurrent thread enrolled this voice during our async window
-                best_live_id = None
-                best_live_name = None
-                best_live_sim = 0.0
-                for p_id, data in meeting_profiles.items():
-                    sim = self.compute_similarity(normalized_emb, data["embedding"])
-                    if sim > best_live_sim:
-                        best_live_sim = sim
-                        best_live_id = p_id
-                        best_live_name = data["name"]
+                best_live_id, best_live_name, best_live_sim = self._best_match(normalized_emb, meeting_profiles)
 
                 if best_live_sim >= threshold:
-                    print(
-                        f"SpeakerIDService: Concurrent task already enrolled this voice as "
-                        f"'{best_live_name}' (ID={best_live_id}, sim={best_live_sim:.3f}). "
-                        f"Matching instead of duplicate auto-enrolling."
+                    logger.info(
+                        "[SpeakerID] Concurrent task already enrolled this voice as "
+                        "'%s' (ID=%s, sim=%.3f). Matching instead of duplicate auto-enrolling.",
+                        best_live_name, best_live_id, best_live_sim
                     )
                     return {"speaker_id": best_live_id, "speaker_name": best_live_name, "similarity": best_live_sim}
 
@@ -470,11 +532,11 @@ class SpeakerIDService:
                     "name": speaker_name,
                     "embedding": normalized_emb
                 }
-                print(f"SpeakerIDService: Auto-enrolled unidentified speaker locally as '{speaker_name}' (ID={profile_id}) for meeting {meeting_id}.")
+                logger.info("[SpeakerID] Auto-enrolled unidentified speaker locally as '%s' (ID=%s) for meeting %s.", speaker_name, profile_id, meeting_id)
                 
             return {"speaker_id": profile_id, "speaker_name": speaker_name, "similarity": 0.0}
         except Exception as e:
-            print(f"SpeakerIDService Error: Identification failed: {e}")
+            logger.exception("[SpeakerID] Identification failed: %s", e)
             return {"speaker_id": "unknown", "speaker_name": "Unknown Speaker", "similarity": 0.0, "error": str(e)}
 
     def verify_speaker(self, profile_id: str, audio: np.ndarray, sample_rate: int, meeting_id: str, threshold: float = 0.5) -> dict:

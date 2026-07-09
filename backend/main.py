@@ -26,6 +26,10 @@ import os
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
+import torch
+torch.set_num_threads(1)  # Prevent CPU thread thrashing across concurrent pipeline stages
+
+
 import sys
 if sys.platform.startswith("win"):
     try:
@@ -818,6 +822,32 @@ async def _run_pipeline(
                     speaker_id = enroll_res.get("profile_id", "unknown")
                     speaker_label = enroll_res.get("name", "Unknown Speaker")
                     pl_logger.info("[SpeakerID] Enrolled '%s' (ID=%s) for meeting %s", speaker_label, speaker_id, state.meeting_id)
+
+                    if enroll_res.get("was_merged"):
+                        source_id = enroll_res.get("merged_from_id")
+                        pl_logger.info("[SpeakerID] Auto-merge detected: %s -> %s (%s). Migrating DB and broadcasting.", source_id, speaker_id, speaker_label)
+                        try:
+                            # 1. Update database records on a background thread
+                            await loop.run_in_executor(
+                                None,
+                                lambda: merge_speaker_utterances(
+                                    state.meeting_id, source_id, speaker_id, speaker_label
+                                )
+                            )
+                        except Exception:
+                            pl_logger.exception(
+                                "[DB] merge_speaker_utterances failed during auto-merge for speaker ID %s -> %s",
+                                source_id, speaker_id
+                            )
+                        
+                        # 2. Broadcast merge confirmation to the specific meeting client
+                        await manager.send_json(websocket, {
+                            "type": "speakers_merged",
+                            "source_id": source_id,
+                            "target_id": speaker_id,
+                            "target_name": speaker_label,
+                            "success": True,
+                        })
             else:
                 dispatch_time = time.perf_counter()
                 def _run_identify():
@@ -979,7 +1009,7 @@ async def _run_pipeline(
                 "speaker_id":   speaker_id,
                 "speaker":      speaker_label,
                 "trans_time_ms": int(trans_time * 1000),
-                "total_time_ms": int((result.get("stt_time", 0) + trans_time) * 1000),
+                "total_time_ms": int(total_time * 1000),
             })
             pl_logger.info("[Window] subtitle_update sent for %s", utt_id)
 
