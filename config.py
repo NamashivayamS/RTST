@@ -48,6 +48,8 @@ SPEAKER_ID_GLOBAL_THRESHOLD    = 0.70  # Strict threshold for global profile dat
 SPEAKER_ID_INTRO_THRESHOLD     = 0.52  # Lenient threshold used only during self-introduction name matching
 SPEAKER_ID_MIN_ENROLL_DURATION = 3.0   # Min audio duration (sec) to auto-enroll a new speaker
 SPEAKER_ID_DEVICE              = os.environ.get("SPEAKER_ID_DEVICE", "auto")  # "auto" | "cpu" | "cuda"
+SPEAKER_ID_MAX_TEMPLATES       = 5     # primary + up to 4 secondary voice templates per speaker
+SPEAKER_ID_TEMPLATE_ACCEPT_SIM = 0.75  # only add a new template on a very confident passive match
 
 
 # ── STT thresholds ────────────────────────────────────────────────────────────

@@ -8,7 +8,9 @@ import logging
 from speechbrain.inference.speaker import EncoderClassifier
 from database.queries import (
     load_global_speaker_profiles,
-    save_global_speaker_profile,
+    create_global_speaker_profile,
+    add_speaker_template,
+    evict_speaker_template,
     update_global_speaker_name,
     delete_global_speaker_profile,
 )
@@ -18,6 +20,8 @@ from config import (
     SPEAKER_ID_INTRO_THRESHOLD,
     SPEAKER_ID_MIN_ENROLL_DURATION,
     SPEAKER_ID_DEVICE,
+    SPEAKER_ID_MAX_TEMPLATES,
+    SPEAKER_ID_TEMPLATE_ACCEPT_SIM,
 )
 
 logger = logging.getLogger("ispeak.speaker_id")
@@ -52,10 +56,8 @@ _NAME_PATTERNS = [
     r"\bmy name is\s+([A-Za-z]+)",
     r"\bmyself\s+([A-Za-z]+)",
     r"\bthis is\s+([A-Za-z]+)\s+speaking",
-    # Tamil: only the explicit "என் பெயர்" (my name is) pattern is safe.
-    # "நான்" (I) is too common — it appears in nearly every Tamil sentence
-    # and would enroll random following words as fake speakers.
-    r"என்\s*பெயர்\s*([A-Za-z\u0B80-\u0BFF]+)",
+    r"என்\s*(?:பெயர்|பேர்)\s*([A-Za-z\u0B80-\u0BFF]+)",
+    r"\bமை\s*நேம்\s*(?:ஈஸ்|இஸ்|இசு)?\s*([A-Za-z\u0B80-\u0BFF]+)",
 ]
 _NAME_RE = [re.compile(p, re.IGNORECASE) for p in _NAME_PATTERNS]
 
@@ -118,6 +120,8 @@ class SpeakerIDService:
         print(f"SpeakerIDService: Detected embedding dimension = {self.emb_dim}")
 
         # meeting_id -> {profile_id_uuid: {"name": name, "embedding": np.ndarray}}
+        # NOTE: local meeting profiles use a single embedding per speaker.
+        # Global profiles use multi-template: {"name": str, "templates": [dict], "primary_index": int}
         self.meeting_profiles: dict[str, dict[str, dict]] = {}
 
         # Load global profiles from DB compatible with active model/dimension
@@ -169,7 +173,7 @@ class SpeakerIDService:
         return self.meeting_profiles[meeting_id]
 
     def _best_match(self, emb: np.ndarray, candidates: dict) -> tuple[str | None, str | None, float]:
-        """Iterate over candidate profiles to find the best cosine similarity match."""
+        """Iterate over single-embedding candidate profiles (local meeting profiles only)."""
         best_id = None
         best_name = None
         best_sim = 0.0
@@ -180,6 +184,52 @@ class SpeakerIDService:
                 best_id = p_id
                 best_name = data["name"]
         return best_id, best_name, best_sim
+
+    def _best_match_multi(self, query_emb: np.ndarray, candidates: dict) -> tuple[str | None, str | None, float, int]:
+        """
+        Multi-template matching against global profiles.
+        candidates: {profile_id: {"name": str, "templates": list[dict]}}
+        Each template dict has {"template_id": str, "embedding": np.ndarray, "is_primary": bool}.
+        Returns (best_id, best_name, best_sim, best_template_index).
+        Vectorized: stacks all templates into one matrix, one matmul, finds per-candidate max.
+        """
+        if not candidates:
+            return None, None, 0.0, -1
+
+        all_embs = []
+        owner_map = []  # parallel: (profile_id, name, template_index_within_profile)
+        for pid, data in candidates.items():
+            for t_idx, t in enumerate(data["templates"]):
+                all_embs.append(t["embedding"])
+                owner_map.append((pid, data["name"], t_idx))
+
+        if not all_embs:
+            return None, None, 0.0, -1
+
+        matrix = np.stack(all_embs)          # shape (total_templates, emb_dim)
+        sims = matrix @ query_emb            # assumes pre-normalized embeddings
+        best_row = int(np.argmax(sims))
+        best_pid, best_name, best_t_idx = owner_map[best_row]
+        return best_pid, best_name, float(sims[best_row]), best_t_idx
+
+    def _find_outlier_template(self, templates: list[dict], protect_index: int) -> int:
+        """
+        Returns the index (excluding protect_index) whose average similarity
+        to all OTHER templates in the list is lowest — i.e., the one that looks
+        least consistent with the rest of this speaker's stored voiceprints.
+        """
+        n = len(templates)
+        avg_sims = []
+        for i in range(n):
+            if i == protect_index:
+                avg_sims.append(float("inf"))  # never selectable
+                continue
+            sims = [
+                self.compute_similarity(templates[i]["embedding"], templates[j]["embedding"])
+                for j in range(n) if j != i
+            ]
+            avg_sims.append(sum(sims) / len(sims) if sims else 0.0)
+        return int(np.argmin(avg_sims))
 
     def clear_meeting(self, meeting_id: str):
         """Call when a meeting/connection ends — frees enrolled voiceprints."""
@@ -194,6 +244,9 @@ class SpeakerIDService:
         Before minting a fresh UUID, checks if the voice matches an existing local
         speaker or global speaker (with lenient intro threshold or strict passive threshold)
         to prevent duplicate enrollments.
+
+        Global profiles use multi-template structure:
+            {"name": str, "templates": [{"template_id": str, "embedding": np.ndarray, "is_primary": bool}], "primary_index": int}
         """
         try:
             new_emb = self.get_embedding(audio, sample_rate)
@@ -209,6 +262,8 @@ class SpeakerIDService:
             db_embedding = None
             result_id = None
             result_name = None
+            was_pre_existing_local = False
+            pre_rename_name = None
 
             with self.lock:
                 profiles = self._get_meeting_profiles(meeting_id)
@@ -216,14 +271,14 @@ class SpeakerIDService:
                 # ── Tier A: existing local match ─────────────────────────────
                 best_local_id, best_local_name, best_local_sim = self._best_match(normalized_emb, profiles)
 
-                # ── Tier A2: name-filtered global search ──────────────────────
+                # ── Tier A2: name-filtered global search (multi-template) ─────
                 name_matched_candidates = {
                     pid: data for pid, data in self.global_profiles.items()
                     if data["name"].strip().lower() == speaker_name.strip().lower()
                 }
-                best_intro_id, best_intro_name, best_intro_sim = self._best_match(
+                best_intro_id, best_intro_name, best_intro_sim, _ = self._best_match_multi(
                     normalized_emb, name_matched_candidates
-                ) if name_matched_candidates else (None, None, 0.0)
+                ) if name_matched_candidates else (None, None, 0.0, -1)
 
                 # ── Decision Tree ────────────────────────────────────────────
                 if best_local_sim >= threshold:
@@ -237,18 +292,18 @@ class SpeakerIDService:
                             }
                             del profiles[best_local_id]
                             result_id, result_name = best_intro_id, speaker_name
-                            
+
                             old_name = self.global_profiles[best_intro_id]["name"]
                             if old_name != speaker_name:
                                 self.global_profiles[best_intro_id]["name"] = speaker_name
                                 update_in_db = True
                         else:
                             # Case 2: Spoken name mismatch/nickname, check for strict global voice match
-                            best_global_id, best_global_name, best_global_sim = self._best_match(
+                            best_global_id, best_global_name, best_global_sim, _ = self._best_match_multi(
                                 normalized_emb, self.global_profiles
                             )
                             if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
-                                # Voice matches a global profile strictly (e.g. 0.85), trust database name
+                                # Voice matches a global profile strictly, trust database name
                                 remap_local_key = (best_local_id, best_global_id)
                                 profiles[best_global_id] = {
                                     "name": best_global_name,
@@ -258,20 +313,22 @@ class SpeakerIDService:
                                 result_id, result_name = best_global_id, best_global_name
                             else:
                                 # Case 3: Genuinely new identity; rename and promote local temp profile
+                                assert best_local_id not in self.global_profiles, (
+                                    f"Temp ID {best_local_id} already exists in global profiles — "
+                                    f"this violates UUID uniqueness"
+                                )
+                                was_pre_existing_local = True
+                                pre_rename_name = profiles[best_local_id]["name"]
+
                                 profiles[best_local_id]["name"] = speaker_name
                                 result_id, result_name = best_local_id, speaker_name
-                                if best_local_id not in self.global_profiles:
-                                    self.global_profiles[best_local_id] = {
-                                        "name": speaker_name,
-                                        "embedding": profiles[best_local_id]["embedding"]
-                                    }
-                                    promote_to_db = True
-                                    db_embedding = profiles[best_local_id]["embedding"]
-                                else:
-                                    old_name = self.global_profiles[best_local_id]["name"]
-                                    if old_name != speaker_name:
-                                        self.global_profiles[best_local_id]["name"] = speaker_name
-                                        update_in_db = True
+                                promote_to_db = True
+                                db_embedding = profiles[best_local_id]["embedding"]
+                                self.global_profiles[best_local_id] = {
+                                    "name": speaker_name,
+                                    "templates": [{"template_id": None, "embedding": db_embedding, "is_primary": True}],
+                                    "primary_index": 0
+                                }
                     else:
                         # Already enrolled under a specific name. Log mismatch if names differ.
                         if best_local_name != speaker_name and not best_local_name.startswith("Speaker "):
@@ -298,26 +355,69 @@ class SpeakerIDService:
 
                 else:
                     # Tier B: Strict, unfiltered global voice match (name-independent safety net)
-                    best_global_id, best_global_name, best_global_sim = self._best_match(
+                    best_global_id, best_global_name, best_global_sim, _ = self._best_match_multi(
                         normalized_emb, self.global_profiles
                     )
                     if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
-                        # Voice matches a global profile strictly (e.g. 0.85), trust database name
+                        # Voice matches a global profile strictly, trust database name
                         profiles[best_global_id] = {"name": best_global_name, "embedding": normalized_emb}
                         result_id, result_name = best_global_id, best_global_name
                     else:
                         # Tier C: Genuinely new speaker
-                        # No concurrent re-check needed — entire method runs under one uninterrupted lock
-                        profile_id = str(uuid.uuid4())
-                        profiles[profile_id] = {"name": speaker_name, "embedding": normalized_emb}
-                        self.global_profiles[profile_id] = {"name": speaker_name, "embedding": normalized_emb}
-                        result_id, result_name = profile_id, speaker_name
+                        provisional_id = str(uuid.uuid4())
+                        profiles[provisional_id] = {"name": speaker_name, "embedding": normalized_emb}
+                        self.global_profiles[provisional_id] = {
+                            "name": speaker_name,
+                            "templates": [{"template_id": None, "embedding": normalized_emb, "is_primary": True}],
+                            "primary_index": 0
+                        }
+                        result_id, result_name = provisional_id, speaker_name
                         promote_to_db = True
                         db_embedding = normalized_emb
 
             # ── Database updates (Outside Lock) ─────────────────────────────
             if promote_to_db:
-                save_global_speaker_profile(result_id, result_name, db_embedding, self.model_name, self.emb_dim)
+                # Save the input ID we are passing, which was result_id (either provisional_id or best_local_id)
+                input_id = result_id
+                try:
+                    # Create new profile + primary template atomically in DB
+                    new_profile_id = create_global_speaker_profile(
+                        result_name, db_embedding, self.model_name, self.emb_dim,
+                        profile_id=input_id
+                    )
+                except Exception:
+                    logger.exception(
+                        "[SpeakerID] DB persistence failed for provisional profile %s — rolling back in-memory reservation.",
+                        input_id
+                    )
+                    with self.lock:
+                        profiles = self._get_meeting_profiles(meeting_id)
+                        self.global_profiles.pop(input_id, None)
+                        if was_pre_existing_local:
+                            if input_id in profiles:
+                                profiles[input_id]["name"] = pre_rename_name
+                        else:
+                            profiles.pop(input_id, None)
+                    return {}
+
+                result_id = new_profile_id
+                # Build in-memory multi-template structure
+                primary_template = {
+                    "template_id": None,  # DB-generated, not critical for in-memory matching
+                    "embedding": db_embedding,
+                    "is_primary": True
+                }
+                with self.lock:
+                    profiles = self._get_meeting_profiles(meeting_id)
+                    if new_profile_id != input_id:
+                        profiles.pop(input_id, None)
+                        self.global_profiles.pop(input_id, None)
+                    profiles[new_profile_id] = {"name": result_name, "embedding": db_embedding}
+                    self.global_profiles[new_profile_id] = {
+                        "name": result_name,
+                        "templates": [primary_template],
+                        "primary_index": 0
+                    }
             elif update_in_db:
                 update_global_speaker_name(result_id, result_name)
 
@@ -356,35 +456,49 @@ class SpeakerIDService:
 
             local_profiles[profile_id]["name"] = new_name
             embedding = local_profiles[profile_id]["embedding"]
-            
+
             # If not already in global profiles, promote it
             if profile_id not in self.global_profiles:
-                self.global_profiles[profile_id] = {
-                    "name": new_name,
-                    "embedding": embedding
-                }
                 is_new_global = True
             else:
                 self.global_profiles[profile_id]["name"] = new_name
-                
+
             print(f"SpeakerIDService: Renamed speaker ID {profile_id} → '{new_name}' in meeting {meeting_id}.")
 
         if is_new_global:
-            # Promote to database
-            save_global_speaker_profile(
-                profile_id, new_name, embedding,
-                self.model_name, self.emb_dim
+            # Promote to database — creates identity + primary template atomically
+            new_id = create_global_speaker_profile(
+                new_name, embedding, self.model_name, self.emb_dim
             )
+            # Build in-memory multi-template structure
+            primary_template = {
+                "template_id": None,
+                "embedding": embedding,
+                "is_primary": True
+            }
+            with self.lock:
+                self.global_profiles[new_id] = {
+                    "name": new_name,
+                    "templates": [primary_template],
+                    "primary_index": 0
+                }
+                # Remap the local profile to the DB-generated id if it differs
+                if new_id != profile_id:
+                    lp = self.meeting_profiles.get(meeting_id, {})
+                    if profile_id in lp:
+                        lp[new_id] = lp.pop(profile_id)
         else:
             # Update name in database
             update_global_speaker_name(profile_id, new_name)
-            
+
         return True
 
     def merge_speakers(self, source_profile_id: str, target_profile_id: str, meeting_id: str) -> bool:
         """
-        Averages the voiceprints of source and target, assigns the target's label,
-        and deletes the source profile. Explicitly triggered by user intent.
+        Merges two speaker profiles by taking the union of their voice templates,
+        capped at SPEAKER_ID_MAX_TEMPLATES (evicting outliers if the union exceeds
+        the cap, protecting the target's primary). Deletes the source profile.
+        Explicitly triggered by user intent.
         """
         with self.lock:
             local_profiles = self.meeting_profiles.get(meeting_id, {})
@@ -393,31 +507,46 @@ class SpeakerIDService:
 
             source_data = self.global_profiles[source_profile_id]
             target_data = self.global_profiles[target_profile_id]
-            target_name = target_data["name"]  # Capture name defensively under lock
+            target_name = target_data["name"]
 
-            # 1. Average embeddings
-            merged = (source_data["embedding"] + target_data["embedding"]) / 2.0
-            norm = np.linalg.norm(merged)
-            normalized_merged = merged / norm if norm > 0 else merged
+            # 1. Union templates: target's templates first (preserving primary), then source's (all non-primary)
+            merged_templates = list(target_data["templates"])
+            for t in source_data.get("templates", []):
+                merged_templates.append({
+                    "template_id": t["template_id"],
+                    "embedding": t["embedding"],
+                    "is_primary": False  # source templates lose primary status
+                })
 
-            # 2. Update target profile with merged embedding
-            self.global_profiles[target_profile_id]["embedding"] = normalized_merged
+            # 2. Evict outliers if union exceeds cap
+            primary_idx = target_data["primary_index"]
+            while len(merged_templates) > SPEAKER_ID_MAX_TEMPLATES:
+                evict_idx = self._find_outlier_template(merged_templates, primary_idx)
+                merged_templates.pop(evict_idx)
+                # Recalculate primary_index after removal
+                for i, t in enumerate(merged_templates):
+                    if t["is_primary"]:
+                        primary_idx = i
+                        break
+
+            # 3. Update target profile in memory
+            self.global_profiles[target_profile_id]["templates"] = merged_templates
+            self.global_profiles[target_profile_id]["primary_index"] = primary_idx
+
+            # Update local meeting profile with target's primary embedding for local matching
+            primary_emb = merged_templates[primary_idx]["embedding"]
             if target_profile_id in local_profiles:
-                local_profiles[target_profile_id]["embedding"] = normalized_merged
+                local_profiles[target_profile_id]["embedding"] = primary_emb
 
-            # 3. Remove source profile from memory maps
+            # 4. Remove source profile from memory maps
             self.global_profiles.pop(source_profile_id, None)
             local_profiles.pop(source_profile_id, None)
             print(f"SpeakerIDService: Merged {source_profile_id} into {target_profile_id} ({target_name}).")
 
-        # 4. Save merged target voiceprint to database
-        save_global_speaker_profile(
-            target_profile_id, target_name, normalized_merged,
-            self.model_name, self.emb_dim
-        )
-        
-        # 5. Delete source profile from database
+        # 5. Delete source profile from database (CASCADE removes its templates)
         delete_global_speaker_profile(source_profile_id)
+        # Note: the merged templates in memory will be persisted incrementally
+        # via the normal template addition flow on subsequent matches.
         return True
 
     @staticmethod
@@ -455,12 +584,15 @@ class SpeakerIDService:
             if best_local_sim >= threshold:
                 return {"speaker_id": best_local_id, "speaker_name": best_local_name, "similarity": best_local_sim}
 
-            # Step 2: Match against global database profiles
-            best_global_id, best_global_name, best_global_sim = self._best_match(normalized_emb, global_snapshot)
+            # Step 2: Match against global database profiles (multi-template)
+            best_global_id, best_global_name, best_global_sim, _ = self._best_match_multi(normalized_emb, global_snapshot)
 
             if best_global_sim >= SPEAKER_ID_GLOBAL_THRESHOLD:
-                best_global_emb = global_snapshot[best_global_id]["embedding"]
+                # Use the primary template's embedding for local session enrollment
+                gp = global_snapshot[best_global_id]
+                best_global_emb = gp["templates"][gp["primary_index"]]["embedding"]
                 # Auto-enroll in the current local meeting session
+                should_add_template = False
                 with self.lock:
                     if meeting_id not in self.meeting_profiles:
                         self.meeting_profiles[meeting_id] = {}
@@ -468,6 +600,36 @@ class SpeakerIDService:
                         "name": best_global_name,
                         "embedding": best_global_emb
                     }
+                    # Template acceptance: only on genuinely confident passive matches
+                    if best_global_sim >= SPEAKER_ID_TEMPLATE_ACCEPT_SIM:
+                        live_gp = self.global_profiles.get(best_global_id)
+                        if live_gp:
+                            templates = live_gp["templates"]
+                            if len(templates) < SPEAKER_ID_MAX_TEMPLATES:
+                                # Room for a new template — add it
+                                new_t = {"template_id": None, "embedding": normalized_emb, "is_primary": False}
+                                templates.append(new_t)
+                                should_add_template = True
+                            else:
+                                # Evict the outlier and replace
+                                evict_idx = self._find_outlier_template(templates, live_gp["primary_index"])
+                                self._evict_info = (templates[evict_idx].get("template_id"), best_global_id, best_global_sim)
+                                templates[evict_idx] = {"template_id": None, "embedding": normalized_emb, "is_primary": False}
+                                should_add_template = True  # will handle evict+add outside lock
+
+                # DB writes outside lock
+                if should_add_template:
+                    try:
+                        evict_info = getattr(self, '_evict_info', None)
+                        if evict_info:
+                            evict_tid, evict_sid, evict_sim = evict_info
+                            if evict_tid:  # only evict if we have a real DB id
+                                evict_speaker_template(evict_tid, evict_sid, evict_sim)
+                            del self._evict_info
+                        add_speaker_template(best_global_id, normalized_emb, best_global_sim)
+                    except Exception:
+                        logger.exception("[SpeakerID] Template add/evict failed for speaker %s", best_global_id)
+
                 return {"speaker_id": best_global_id, "speaker_name": best_global_name, "similarity": best_global_sim}
 
             # Log details about the best sub-threshold match

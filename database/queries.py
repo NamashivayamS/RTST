@@ -224,9 +224,15 @@ def merge_speaker_utterances(
 
 def load_global_speaker_profiles(model_version: str, embedding_dim: int) -> dict:
     """
-    Loads all global speaker profiles compatible with the active model.
+    Loads all global speaker profiles and their voice templates compatible
+    with the active model.
+
     Returns:
-        dict: {profile_id_str: {"name": str, "embedding": np.ndarray}}
+        dict: {profile_id_str: {
+            "name": str,
+            "templates": [{"template_id": str, "embedding": np.ndarray, "is_primary": bool}, ...],
+            "primary_index": int   # index into "templates" where is_primary=True
+        }}
     """
     conn = None
     profiles = {}
@@ -235,22 +241,39 @@ def load_global_speaker_profiles(model_version: str, embedding_dim: int) -> dict
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, speaker_name, embedding 
-            FROM global_speaker_profiles
-            WHERE model_version = %s AND embedding_dim = %s;
+            SELECT p.id AS profile_id, p.speaker_name,
+                   t.id AS template_id, t.embedding, t.is_primary
+            FROM global_speaker_profiles p
+            JOIN speaker_voice_templates t ON t.speaker_id = p.id
+            WHERE p.model_version = %s AND p.embedding_dim = %s
+            ORDER BY p.id, t.is_primary DESC, t.created_at ASC;
             """,
             (model_version, embedding_dim)
         )
         rows = cur.fetchall()
         for row in rows:
-            profile_id = str(row["id"])
-            name = row["speaker_name"]
-            emb_bytes = bytes(row["embedding"])  # cast memoryview to bytes
-            profiles[profile_id] = {
-                "name": name,
-                "embedding": np.frombuffer(emb_bytes, dtype=np.float32)
-            }
-        logger.info(f"[DB] Loaded {len(profiles)} global speaker profiles.")
+            pid = str(row["profile_id"])
+            if pid not in profiles:
+                profiles[pid] = {
+                    "name": row["speaker_name"],
+                    "templates": [],
+                    "primary_index": 0
+                }
+            emb_bytes = bytes(row["embedding"])
+            profiles[pid]["templates"].append({
+                "template_id": str(row["template_id"]),
+                "embedding": np.frombuffer(emb_bytes, dtype=np.float32),
+                "is_primary": row["is_primary"]
+            })
+
+        # Fix up primary_index for each profile
+        for pid, data in profiles.items():
+            for i, t in enumerate(data["templates"]):
+                if t["is_primary"]:
+                    data["primary_index"] = i
+                    break
+
+        logger.info(f"[DB] Loaded {len(profiles)} global speaker profiles (multi-template).")
         return profiles
     except Exception:
         logger.exception("[DB] Failed to load global speaker profiles.")
@@ -260,30 +283,184 @@ def load_global_speaker_profiles(model_version: str, embedding_dim: int) -> dict
             release_connection(conn)
 
 
-def save_global_speaker_profile(profile_id: str, speaker_name: str, embedding: np.ndarray, model_version: str, embedding_dim: int) -> None:
+def create_global_speaker_profile(
+    speaker_name: str,
+    primary_embedding: np.ndarray,
+    model_version: str,
+    embedding_dim: int,
+    profile_id: str = None,
+) -> str:
     """
-    Upserts a speaker profile in the database keyed on profile ID.
+    Creates a new identity row in global_speaker_profiles AND its first
+    (is_primary=True) row in speaker_voice_templates, in a single transaction.
+
+    If profile_id is given, it is used explicitly as the new row's primary key —
+    needed so enroll_speaker's Case 3 can preserve the local temp UUID's identity
+    (the local meeting_profiles dict, any already-saved utterance rows, and the
+    frontend's rendered speaker_id all stay valid without a remap/merge broadcast).
+    If profile_id is None, Postgres generates a fresh UUID via the column default.
+
+    Returns the new profile_id as a string either way.
     """
     conn = None
     try:
         conn = get_connection()
         cur = conn.cursor()
-        emb_bytes = embedding.tobytes()
+
+        # 1. Insert identity row
+        if profile_id is not None:
+            cur.execute(
+                """
+                INSERT INTO global_speaker_profiles (id, speaker_name, model_version, embedding_dim)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id;
+                """,
+                (profile_id, speaker_name, model_version, embedding_dim),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO global_speaker_profiles (speaker_name, model_version, embedding_dim)
+                VALUES (%s, %s, %s)
+                RETURNING id;
+                """,
+                (speaker_name, model_version, embedding_dim),
+            )
+        result_id = str(cur.fetchone()["id"])
+
+        # 2. Insert primary template
+        emb_bytes = primary_embedding.tobytes()
         cur.execute(
             """
-            INSERT INTO global_speaker_profiles (id, speaker_name, embedding, model_version, embedding_dim, updated_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (id)
-            DO UPDATE SET speaker_name = EXCLUDED.speaker_name, embedding = EXCLUDED.embedding, updated_at = CURRENT_TIMESTAMP;
+            INSERT INTO speaker_voice_templates (speaker_id, embedding, is_primary)
+            VALUES (%s, %s, TRUE)
+            RETURNING id;
             """,
-            (profile_id, speaker_name, psycopg2.Binary(emb_bytes), model_version, embedding_dim),
+            (result_id, psycopg2.Binary(emb_bytes)),
         )
+        template_id = str(cur.fetchone()["id"])
+
         conn.commit()
-        logger.info(f"[DB] Saved global speaker profile: {profile_id} ({speaker_name})")
+        logger.info(
+            "[DB] Created global speaker profile: %s (%s), primary template: %s",
+            result_id, speaker_name, template_id,
+        )
+        return result_id
+
     except Exception:
         if conn:
             conn.rollback()
-        logger.exception("[DB] Failed to save global speaker profile.")
+        logger.exception("[DB] Failed to create global speaker profile.")
+        raise
+
+    finally:
+        if conn:
+            release_connection(conn)
+
+
+def add_speaker_template(
+    profile_id: str,
+    embedding: np.ndarray,
+    similarity: float,
+) -> str:
+    """
+    Inserts a new non-primary template row for an existing speaker.
+    Also inserts an 'added' row into speaker_template_events with the similarity score.
+    Returns the new template row's id.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        emb_bytes = embedding.tobytes()
+        cur.execute(
+            """
+            INSERT INTO speaker_voice_templates (speaker_id, embedding, is_primary)
+            VALUES (%s, %s, FALSE)
+            RETURNING id;
+            """,
+            (profile_id, psycopg2.Binary(emb_bytes)),
+        )
+        template_id = str(cur.fetchone()["id"])
+
+        cur.execute(
+            """
+            INSERT INTO speaker_template_events (speaker_id, action, similarity)
+            VALUES (%s, 'added', %s);
+            """,
+            (profile_id, similarity),
+        )
+
+        conn.commit()
+        logger.info(
+            "[DB] Added secondary template %s for speaker %s (sim=%.3f)",
+            template_id, profile_id, similarity,
+        )
+        return template_id
+
+    except Exception:
+        if conn:
+            conn.rollback()
+        logger.exception("[DB] Failed to add speaker template.")
+        raise
+
+    finally:
+        if conn:
+            release_connection(conn)
+
+
+def evict_speaker_template(
+    template_id: str,
+    speaker_id: str,
+    similarity: float,
+) -> None:
+    """
+    Deletes one non-primary template row.
+    Also inserts an 'evicted' row into speaker_template_events.
+    Must never be called with a template_id where is_primary=True — asserts this.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Safety check: never evict the primary template
+        cur.execute(
+            "SELECT is_primary FROM speaker_voice_templates WHERE id = %s;",
+            (template_id,),
+        )
+        row = cur.fetchone()
+        assert row is not None, f"Template {template_id} not found in database"
+        assert not row["is_primary"], (
+            f"Attempted to evict primary template {template_id} for speaker {speaker_id} — this is a bug"
+        )
+
+        cur.execute(
+            "DELETE FROM speaker_voice_templates WHERE id = %s;",
+            (template_id,),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO speaker_template_events (speaker_id, action, similarity)
+            VALUES (%s, 'evicted', %s);
+            """,
+            (speaker_id, similarity),
+        )
+
+        conn.commit()
+        logger.info(
+            "[DB] Evicted template %s from speaker %s (sim=%.3f)",
+            template_id, speaker_id, similarity,
+        )
+
+    except Exception:
+        if conn:
+            conn.rollback()
+        logger.exception("[DB] Failed to evict speaker template.")
+        raise
+
     finally:
         if conn:
             release_connection(conn)
@@ -319,6 +496,7 @@ def update_global_speaker_name(profile_id: str, new_name: str) -> None:
 def delete_global_speaker_profile(profile_id: str) -> None:
     """
     Deletes a global speaker profile.
+    CASCADE will remove all associated templates automatically.
     """
     conn = None
     try:

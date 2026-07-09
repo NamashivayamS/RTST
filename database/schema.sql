@@ -38,14 +38,37 @@ CREATE TABLE IF NOT EXISTS utterances (
 INSERT INTO departments (id, name)
 VALUES ('b6f8468a-477c-4045-a696-c402afae99a5', 'Default Department')
 ON CONFLICT (id) DO NOTHING;
--- 5. Global Speaker Profiles for Cross-Meeting Identification
 
+-- 5. Global Speaker Profiles for Cross-Meeting Identification
+--    Identity only — voice templates are stored in speaker_voice_templates (one-to-many).
 CREATE TABLE IF NOT EXISTS global_speaker_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     speaker_name VARCHAR(255) NOT NULL,
-    embedding BYTEA NOT NULL,
     model_version VARCHAR(255) NOT NULL,
     embedding_dim INTEGER NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 6. Speaker Voice Templates — each speaker can have up to N voice embeddings
+--    Template 0 (is_primary=TRUE) is the original enrollment voiceprint and is never evicted.
+--    Templates 1..N-1 are adaptive secondary voiceprints added on high-confidence passive matches.
+CREATE TABLE IF NOT EXISTS speaker_voice_templates (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    speaker_id UUID NOT NULL REFERENCES global_speaker_profiles(id) ON DELETE CASCADE,
+    embedding BYTEA NOT NULL,
+    is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_speaker_voice_templates_speaker_id
+    ON speaker_voice_templates(speaker_id);
+
+-- 7. Audit trail for template additions/evictions — needed to debug drift issues later
+CREATE TABLE IF NOT EXISTS speaker_template_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    speaker_id UUID NOT NULL,
+    action VARCHAR(20) NOT NULL,   -- 'added' | 'evicted'
+    similarity FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

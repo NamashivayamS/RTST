@@ -15,15 +15,28 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import services.speaker_id_service as service_module
 # Mock the DB queries at the module level before instantiation to avoid database dependency
 service_module.load_global_speaker_profiles = MagicMock(return_value={})
-service_module.save_global_speaker_profile = MagicMock()
+service_module.create_global_speaker_profile = MagicMock(return_value="new-db-uuid")
+service_module.add_speaker_template = MagicMock(return_value="new-template-uuid")
+service_module.evict_speaker_template = MagicMock()
 service_module.update_global_speaker_name = MagicMock()
+service_module.delete_global_speaker_profile = MagicMock()
 
 from services.speaker_id_service import SpeakerIDService
+
+
+def _make_global_profile(name, embedding):
+    """Helper: build a multi-template global profile dict from a single embedding."""
+    return {
+        "name": name,
+        "templates": [{"template_id": "mock-tid", "embedding": embedding, "is_primary": True}],
+        "primary_index": 0
+    }
+
 
 class TestSpeakerIDDeduplication(unittest.TestCase):
     def setUp(self):
         # Reset mocks
-        service_module.save_global_speaker_profile.reset_mock()
+        service_module.create_global_speaker_profile.reset_mock()
         service_module.update_global_speaker_name.reset_mock()
 
         # Instantiate service (we mock the classifier setup so it doesn't load SpeechBrain models)
@@ -42,12 +55,9 @@ class TestSpeakerIDDeduplication(unittest.TestCase):
         # Case 1: Name + voice agree on pre-existing global identity (lenient 0.52+ match)
         meeting_id = "test_meeting"
         global_uuid = "global-namashivayam-uuid"
-        
-        # Seed global profiles with Namashivayam
-        self.service.global_profiles[global_uuid] = {
-            "name": "Namashivayam",
-            "embedding": self.v_global
-        }
+
+        # Seed global profiles with Namashivayam (multi-template structure)
+        self.service.global_profiles[global_uuid] = _make_global_profile("Namashivayam", self.v_global)
 
         # Seed local session profiles with a generic anonymous "Speaker 1"
         temp_uuid = "temp-speaker-1"
@@ -80,11 +90,8 @@ class TestSpeakerIDDeduplication(unittest.TestCase):
         meeting_id = "test_meeting"
         global_uuid = "global-namashivayam-uuid"
 
-        # Seed global profiles
-        self.service.global_profiles[global_uuid] = {
-            "name": "Namashivayam",
-            "embedding": self.v_global
-        }
+        # Seed global profiles (multi-template)
+        self.service.global_profiles[global_uuid] = _make_global_profile("Namashivayam", self.v_global)
 
         # Seed local profiles with generic anonymous "Speaker 1"
         temp_uuid = "temp-speaker-1"
@@ -113,7 +120,7 @@ class TestSpeakerIDDeduplication(unittest.TestCase):
     def test_case_3_new_identity_promotion(self):
         # Case 3: Genuinely new speaker says name "John". No global match.
         meeting_id = "test_meeting"
-        
+
         # Seed local profiles with generic "Speaker 1"
         temp_uuid = "temp-speaker-1"
         profiles = self.service._get_meeting_profiles(meeting_id)
@@ -126,26 +133,26 @@ class TestSpeakerIDDeduplication(unittest.TestCase):
 
         res = self.service.enroll_speaker("John", np.zeros(16000), 16000, meeting_id)
 
-        # Verify results
-        self.assertEqual(res.get("profile_id"), temp_uuid)
+        # Verify results — profile_id is now DB-generated ("new-db-uuid" from mock)
+        self.assertEqual(res.get("profile_id"), "new-db-uuid")
         self.assertEqual(res.get("name"), "John")
         self.assertFalse(res.get("was_merged"))
 
-        # Verify memory and DB trigger
-        self.assertEqual(profiles[temp_uuid]["name"], "John")
-        self.assertIn(temp_uuid, self.service.global_profiles)
-        service_module.save_global_speaker_profile.assert_called_once()
+        # Verify DB create was called
+        service_module.create_global_speaker_profile.assert_called_once()
+        # Verify in-memory global profile has multi-template structure
+        self.assertIn("new-db-uuid", self.service.global_profiles)
+        gp = self.service.global_profiles["new-db-uuid"]
+        self.assertEqual(len(gp["templates"]), 1)
+        self.assertTrue(gp["templates"][0]["is_primary"])
 
     def test_tier_b_strict_fallback_fresh(self):
         # Tier B: No local profile exists yet, name doesn't match, but voice matches global strictly (0.70+)
         meeting_id = "test_meeting"
         global_uuid = "global-namashivayam-uuid"
 
-        # Seed global profiles
-        self.service.global_profiles[global_uuid] = {
-            "name": "Namashivayam",
-            "embedding": self.v_global
-        }
+        # Seed global profiles (multi-template)
+        self.service.global_profiles[global_uuid] = _make_global_profile("Namashivayam", self.v_global)
 
         # Clear meeting profiles (no local profile exists yet)
         profiles = self.service._get_meeting_profiles(meeting_id)

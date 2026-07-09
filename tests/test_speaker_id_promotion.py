@@ -65,9 +65,19 @@ def run_test():
         print("\n=== Cross-method promotion handoff (identify -> enroll) tested successfully and verified against PostgreSQL! ===")
     
     finally:
+        # Clean up both the local temp ID and whatever ID was actually created/promoted (res2 profile_id)
+        cleanup_ids = set()
         if 'profile_id' in locals() and profile_id:
-            print(f"Cleaning up database speaker profile {profile_id}...")
-            delete_global_speaker_profile(profile_id)
+            cleanup_ids.add(profile_id)
+        if 'res2' in locals() and isinstance(res2, dict) and res2.get("profile_id"):
+            cleanup_ids.add(res2.get("profile_id"))
+
+        for pid in cleanup_ids:
+            print(f"Cleaning up database speaker profile {pid}...")
+            try:
+                delete_global_speaker_profile(pid)
+            except Exception as ex:
+                print(f"Failed to delete {pid}: {ex}")
         close_pool()
 
 if __name__ == "__main__":
