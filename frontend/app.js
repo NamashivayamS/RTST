@@ -630,6 +630,19 @@ const summaryText = document.getElementById('summaryText');
 const copySummaryBtn = document.getElementById('copySummaryBtn');
 const downloadSummaryBtn = document.getElementById('downloadSummaryBtn');
 
+// New Tab Elements
+const tabLiveTranscript = document.getElementById('tabLiveTranscript');
+const tabMeetingSummary = document.getElementById('tabMeetingSummary');
+const transcriptToolbar = document.getElementById('transcriptToolbar');
+const mainSummaryArea = document.getElementById('mainSummaryArea');
+
+const summaryTabPlaceholder = document.getElementById('summaryTabPlaceholder');
+const summaryReportLayout = document.getElementById('summaryReportLayout');
+const mainSummaryContent = document.getElementById('mainSummaryContent');
+const generateSummaryTabBtn = document.getElementById('generateSummaryTabBtn');
+const copySummaryTabBtn = document.getElementById('copySummaryTabBtn');
+const downloadSummaryTabBtn = document.getElementById('downloadSummaryTabBtn');
+
 let rawSummaryMarkdown = '';
 
 // A lightweight markdown to HTML converter for professional layout
@@ -691,13 +704,18 @@ function parseInlineMarkdown(text) {
     return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 }
 
-summarizeBtn.addEventListener('click', async () => {
+// Unified function to request summarization and update UI
+async function executeSummarization() {
     if (!currentMeetingId) { alert('No active meeting to summarize.'); return; }
 
-    // Show loading state
+    // Set loading state on both buttons
     summarizeBtn.disabled = true;
-    const originalHTML = summarizeBtn.innerHTML;
+    generateSummaryTabBtn.disabled = true;
+    const origSidebarHTML = summarizeBtn.innerHTML;
+    const origTabHTML = generateSummaryTabBtn.innerHTML;
+
     summarizeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> <span>Summarizing...</span>';
+    generateSummaryTabBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> Summarizing...';
 
     try {
         const response = await fetch(`/api/meetings/${currentMeetingId}/summarize`, { method: 'POST' });
@@ -707,27 +725,82 @@ summarizeBtn.addEventListener('click', async () => {
             alert('Summarization failed: ' + data.error);
         } else if (data.summary) {
             rawSummaryMarkdown = data.summary;
-            summaryText.innerHTML = parseSummaryMarkdown(data.summary);
+            const htmlContent = parseSummaryMarkdown(data.summary);
+
+            // Update sidebar widget
+            summaryText.innerHTML = htmlContent;
             summaryPanel.style.display = 'block';
+
+            // Update main tab page
+            mainSummaryContent.innerHTML = htmlContent;
+            summaryTabPlaceholder.style.display = 'none';
+            summaryReportLayout.style.display = 'flex';
         }
     } catch (err) {
         alert('Summarization request failed: ' + err.message);
     } finally {
         summarizeBtn.disabled = false;
-        summarizeBtn.innerHTML = originalHTML;
+        generateSummaryTabBtn.disabled = false;
+        summarizeBtn.innerHTML = origSidebarHTML;
+        generateSummaryTabBtn.innerHTML = origTabHTML;
+    }
+}
+
+summarizeBtn.addEventListener('click', executeSummarization);
+generateSummaryTabBtn.addEventListener('click', executeSummarization);
+
+// Tab switching handlers
+tabLiveTranscript.addEventListener('click', (e) => {
+    e.preventDefault();
+    tabLiveTranscript.classList.add('active');
+    tabMeetingSummary.classList.remove('active');
+
+    transcriptToolbar.style.display = 'flex';
+    transcriptArea.style.display = 'block';
+    mainSummaryArea.style.display = 'none';
+});
+
+tabMeetingSummary.addEventListener('click', (e) => {
+    e.preventDefault();
+    tabMeetingSummary.classList.add('active');
+    tabLiveTranscript.classList.remove('active');
+
+    transcriptToolbar.style.display = 'none';
+    transcriptArea.style.display = 'none';
+    mainSummaryArea.style.display = 'flex';
+
+    // Update layout depending on if a summary is already generated
+    if (rawSummaryMarkdown) {
+        mainSummaryContent.innerHTML = parseSummaryMarkdown(rawSummaryMarkdown);
+        summaryTabPlaceholder.style.display = 'none';
+        summaryReportLayout.style.display = 'flex';
+    } else {
+        summaryTabPlaceholder.style.display = 'flex';
+        summaryReportLayout.style.display = 'none';
     }
 });
 
-copySummaryBtn.addEventListener('click', () => {
+// Copy summary actions
+function copySummaryToClipboard() {
     if (!rawSummaryMarkdown) return;
     navigator.clipboard.writeText(rawSummaryMarkdown).then(() => {
         const origHTML = copySummaryBtn.innerHTML;
-        copySummaryBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-        setTimeout(() => { copySummaryBtn.innerHTML = origHTML; }, 1500);
-    });
-});
+        const origTabHTML = copySummaryTabBtn.innerHTML;
 
-downloadSummaryBtn.addEventListener('click', () => {
+        copySummaryBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        copySummaryTabBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+
+        setTimeout(() => {
+            copySummaryBtn.innerHTML = origHTML;
+            copySummaryTabBtn.innerHTML = origTabHTML;
+        }, 1500);
+    });
+}
+copySummaryBtn.addEventListener('click', copySummaryToClipboard);
+copySummaryTabBtn.addEventListener('click', copySummaryToClipboard);
+
+// Download summary actions
+function downloadSummaryFile() {
     if (!rawSummaryMarkdown) { alert('No summary available to download.'); return; }
     const blob = new Blob([rawSummaryMarkdown], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -737,8 +810,9 @@ downloadSummaryBtn.addEventListener('click', () => {
     });
     a.click();
     URL.revokeObjectURL(url);
-});
-
+}
+downloadSummaryBtn.addEventListener('click', downloadSummaryFile);
+downloadSummaryTabBtn.addEventListener('click', downloadSummaryFile);
 
 
 // ── View Mode Toggles ─────────────────────────────────────────────────────────
@@ -760,6 +834,7 @@ viewSplitBtn.addEventListener('click', () => {
 // ── Sidebar toggles ───────────────────────────────────────────────────────────
 toggleLeftBtn.addEventListener('click', () => appContainer.classList.toggle('hide-left'));
 toggleRightBtn.addEventListener('click', () => appContainer.classList.toggle('hide-right'));
+
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 startIdleAnimation();   // start gentle idle wave immediately

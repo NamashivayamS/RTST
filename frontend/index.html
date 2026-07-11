@@ -7,7 +7,7 @@
     <title>iSpeak Global - Real-Time Neural Translation</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=15">
+    <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 
 <body class="dark-theme">
@@ -90,10 +90,11 @@
 
             <!-- TABS & TOOLBAR -->
             <div class="tabs">
-                <a href="#" class="tab active">Live Transcript</a>
+                <a href="#" class="tab active" id="tabLiveTranscript">Live Transcript</a>
+                <a href="#" class="tab" id="tabMeetingSummary">Meeting Summary</a>
             </div>
 
-            <div class="transcript-toolbar">
+            <div class="transcript-toolbar" id="transcriptToolbar">
                 <div class="toggle-group">
                     <label class="switch">
                         <input type="checkbox" id="autoScrollToggle" checked>
@@ -117,6 +118,49 @@
                 </div>
                 <!-- Transcript cards will be appended here -->
             </div>
+
+            <!-- MEETING SUMMARY AREA -->
+            <div class="summary-area" id="mainSummaryArea" style="display: none;">
+                <div class="summary-card">
+                    <!-- Placeholder / Empty state inside summary page -->
+                    <div class="summary-placeholder" id="summaryTabPlaceholder">
+                        <i class="fa-solid fa-wand-magic-sparkles text-purple" style="font-size: 48px; margin-bottom: 16px;"></i>
+                        <h3>No summary generated yet</h3>
+                        <p style="color: var(--text-secondary); max-width: 400px; margin-bottom: 24px; font-size: 13.5px; line-height: 1.5;">
+                            Analyze your live translation session and generate a structured summary of key points, decisions, and next steps.
+                        </p>
+                        <button class="export-btn" id="generateSummaryTabBtn" style="padding: 10px 24px; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; justify-content: center;">
+                            <i class="fa-solid fa-wand-magic-sparkles text-purple"></i> Generate Summary
+                        </button>
+                    </div>
+
+                    <!-- Actual content layout when summary is generated -->
+                    <div class="summary-report-layout" id="summaryReportLayout" style="display: none;">
+                        <div class="summary-report-header">
+                            <div class="summary-report-title-group">
+                                <i class="fa-solid fa-file-invoice text-purple"></i>
+                                <div>
+                                    <h3>Meeting Analysis Report</h3>
+                                    <span id="summaryMetaText">Generated from live session transcript</span>
+                                </div>
+                            </div>
+                            <div class="summary-report-actions">
+                                <button class="btn-report-action" id="copySummaryTabBtn" title="Copy summary text">
+                                    <i class="fa-regular fa-copy"></i> Copy
+                                </button>
+                                <button class="btn-report-action" id="downloadSummaryTabBtn" title="Download report text">
+                                    <i class="fa-solid fa-download"></i> Download TXT
+                                </button>
+                            </div>
+                        </div>
+                        <hr class="summary-divider" />
+                        <div class="summary-report-body" id="mainSummaryContent">
+                            <!-- Rendered summary content here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
 
             <!-- BOTTOM CONTROL DOCK -->
             <div class="control-dock">
@@ -240,7 +284,7 @@
             </div>
         </aside>
     </div>
-    <script src="/static/app.js?v=16"></script>
+    <script src="/static/app.js?v=17"></script>
 </body>
 
 </html>
