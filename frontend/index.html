@@ -7,7 +7,7 @@
     <title>iSpeak Global - Real-Time Neural Translation</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=18">
+    <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 
 <body class="dark-theme">
@@ -92,7 +92,9 @@
             <div class="tabs">
                 <a href="#" class="tab active" id="tabLiveTranscript">Live Transcript</a>
                 <a href="#" class="tab" id="tabMeetingSummary">Meeting Summary</a>
+                <a href="#" class="tab" id="tabMinutesOfMeeting">Minutes of Meeting</a>
             </div>
+
 
             <div class="transcript-toolbar" id="transcriptToolbar">
                 <div class="toggle-group">
@@ -160,6 +162,49 @@
                     </div>
                 </div>
             </div>
+
+            <!-- MINUTES OF MEETING AREA -->
+            <div class="minutes-area" id="mainMinutesArea" style="display: none;">
+                <div class="minutes-card">
+                    <!-- Placeholder / Empty state inside minutes page -->
+                    <div class="minutes-placeholder" id="minutesTabPlaceholder">
+                        <i class="fa-solid fa-file-signature text-purple" style="font-size: 48px; margin-bottom: 16px;"></i>
+                        <h3>No minutes generated yet</h3>
+                        <p style="color: var(--text-secondary); max-width: 400px; margin-bottom: 24px; font-size: 13.5px; line-height: 1.5;">
+                            Generate a formal, structured Minutes of Meeting (MoM) report detailing agenda topics, discussion logs, and action owners.
+                        </p>
+                        <button class="export-btn" id="generateMinutesTabBtn" style="padding: 10px 24px; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; justify-content: center;">
+                            <i class="fa-solid fa-file-signature text-purple"></i> Generate Minutes (MoM)
+                        </button>
+                    </div>
+
+                    <!-- Actual content layout when minutes are generated -->
+                    <div class="minutes-report-layout" id="minutesReportLayout" style="display: none;">
+                        <div class="minutes-report-header">
+                            <div class="minutes-report-title-group">
+                                <i class="fa-solid fa-file-signature text-purple"></i>
+                                <div>
+                                    <h3>Minutes of Meeting (MoM)</h3>
+                                    <span id="minutesMetaText">Official record of live session dialogue</span>
+                                </div>
+                            </div>
+                            <div class="minutes-report-actions">
+                                <button class="btn-report-action" id="copyMinutesTabBtn" title="Copy minutes text">
+                                    <i class="fa-regular fa-copy"></i> Copy
+                                </button>
+                                <button class="btn-report-action" id="downloadMinutesTabBtn" title="Download minutes text">
+                                    <i class="fa-solid fa-download"></i> Download TXT
+                                </button>
+                            </div>
+                        </div>
+                        <hr class="minutes-divider" />
+                        <div class="minutes-report-body" id="mainMinutesContent">
+                            <!-- Rendered minutes content here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
 
 
             <!-- BOTTOM CONTROL DOCK -->
@@ -284,7 +329,7 @@
             </div>
         </aside>
     </div>
-    <script src="/static/app.js?v=17"></script>
+    <script src="/static/app.js?v=18"></script>
 </body>
 
 </html>

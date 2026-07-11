@@ -643,7 +643,19 @@ const generateSummaryTabBtn = document.getElementById('generateSummaryTabBtn');
 const copySummaryTabBtn = document.getElementById('copySummaryTabBtn');
 const downloadSummaryTabBtn = document.getElementById('downloadSummaryTabBtn');
 
+// New Minutes Tab Elements
+const tabMinutesOfMeeting = document.getElementById('tabMinutesOfMeeting');
+const mainMinutesArea = document.getElementById('mainMinutesArea');
+const minutesTabPlaceholder = document.getElementById('minutesTabPlaceholder');
+const minutesReportLayout = document.getElementById('minutesReportLayout');
+const mainMinutesContent = document.getElementById('mainMinutesContent');
+const generateMinutesTabBtn = document.getElementById('generateMinutesTabBtn');
+const copyMinutesTabBtn = document.getElementById('copyMinutesTabBtn');
+const downloadMinutesTabBtn = document.getElementById('downloadMinutesTabBtn');
+
 let rawSummaryMarkdown = '';
+let rawMinutesMarkdown = '';
+
 
 // A lightweight markdown to HTML converter for professional layout
 function parseSummaryMarkdown(markdown) {
@@ -754,20 +766,24 @@ tabLiveTranscript.addEventListener('click', (e) => {
     e.preventDefault();
     tabLiveTranscript.classList.add('active');
     tabMeetingSummary.classList.remove('active');
+    tabMinutesOfMeeting.classList.remove('active');
 
     transcriptToolbar.style.display = 'flex';
     transcriptArea.style.display = 'block';
     mainSummaryArea.style.display = 'none';
+    mainMinutesArea.style.display = 'none';
 });
 
 tabMeetingSummary.addEventListener('click', (e) => {
     e.preventDefault();
     tabMeetingSummary.classList.add('active');
     tabLiveTranscript.classList.remove('active');
+    tabMinutesOfMeeting.classList.remove('active');
 
     transcriptToolbar.style.display = 'none';
     transcriptArea.style.display = 'none';
     mainSummaryArea.style.display = 'flex';
+    mainMinutesArea.style.display = 'none';
 
     // Update layout depending on if a summary is already generated
     if (rawSummaryMarkdown) {
@@ -779,6 +795,61 @@ tabMeetingSummary.addEventListener('click', (e) => {
         summaryReportLayout.style.display = 'none';
     }
 });
+
+tabMinutesOfMeeting.addEventListener('click', (e) => {
+    e.preventDefault();
+    tabMinutesOfMeeting.classList.add('active');
+    tabLiveTranscript.classList.remove('active');
+    tabMeetingSummary.classList.remove('active');
+
+    transcriptToolbar.style.display = 'none';
+    transcriptArea.style.display = 'none';
+    mainSummaryArea.style.display = 'none';
+    mainMinutesArea.style.display = 'flex';
+
+    // Update layout depending on if minutes are already generated
+    if (rawMinutesMarkdown) {
+        mainMinutesContent.innerHTML = parseSummaryMarkdown(rawMinutesMarkdown);
+        minutesTabPlaceholder.style.display = 'none';
+        minutesReportLayout.style.display = 'flex';
+    } else {
+        minutesTabPlaceholder.style.display = 'flex';
+        minutesReportLayout.style.display = 'none';
+    }
+});
+
+// Unified function to request Minutes of Meeting and update UI
+async function executeGenerateMinutes() {
+    if (!currentMeetingId) { alert('No active meeting to generate Minutes of Meeting.'); return; }
+
+    generateMinutesTabBtn.disabled = true;
+    const origTabHTML = generateMinutesTabBtn.innerHTML;
+    generateMinutesTabBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> Generating MoM...';
+
+    try {
+        const response = await fetch(`/api/meetings/${currentMeetingId}/minutes`, { method: 'POST' });
+        const data = await response.json();
+
+        if (data.error) {
+            alert('Minutes generation failed: ' + data.error);
+        } else if (data.minutes) {
+            rawMinutesMarkdown = data.minutes;
+            const htmlContent = parseSummaryMarkdown(data.minutes);
+
+            // Update main tab page
+            mainMinutesContent.innerHTML = htmlContent;
+            minutesTabPlaceholder.style.display = 'none';
+            minutesReportLayout.style.display = 'flex';
+        }
+    } catch (err) {
+        alert('Minutes generation request failed: ' + err.message);
+    } finally {
+        generateMinutesTabBtn.disabled = false;
+        generateMinutesTabBtn.innerHTML = origTabHTML;
+    }
+}
+
+generateMinutesTabBtn.addEventListener('click', executeGenerateMinutes);
 
 // Copy summary actions
 function copySummaryToClipboard() {
@@ -799,6 +870,19 @@ function copySummaryToClipboard() {
 copySummaryBtn.addEventListener('click', copySummaryToClipboard);
 copySummaryTabBtn.addEventListener('click', copySummaryToClipboard);
 
+// Copy minutes actions
+function copyMinutesToClipboard() {
+    if (!rawMinutesMarkdown) return;
+    navigator.clipboard.writeText(rawMinutesMarkdown).then(() => {
+        const origTabHTML = copyMinutesTabBtn.innerHTML;
+        copyMinutesTabBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        setTimeout(() => {
+            copyMinutesTabBtn.innerHTML = origTabHTML;
+        }, 1500);
+    });
+}
+copyMinutesTabBtn.addEventListener('click', copyMinutesToClipboard);
+
 // Download summary actions
 function downloadSummaryFile() {
     if (!rawSummaryMarkdown) { alert('No summary available to download.'); return; }
@@ -813,6 +897,20 @@ function downloadSummaryFile() {
 }
 downloadSummaryBtn.addEventListener('click', downloadSummaryFile);
 downloadSummaryTabBtn.addEventListener('click', downloadSummaryFile);
+
+// Download minutes actions
+function downloadMinutesFile() {
+    if (!rawMinutesMarkdown) { alert('No minutes available to download.'); return; }
+    const blob = new Blob([rawMinutesMarkdown], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+        href: url,
+        download: `meeting_minutes_${currentMeetingId}.txt`
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+}
+downloadMinutesTabBtn.addEventListener('click', downloadMinutesFile);
 
 
 // ── View Mode Toggles ─────────────────────────────────────────────────────────
@@ -834,6 +932,7 @@ viewSplitBtn.addEventListener('click', () => {
 // ── Sidebar toggles ───────────────────────────────────────────────────────────
 toggleLeftBtn.addEventListener('click', () => appContainer.classList.toggle('hide-left'));
 toggleRightBtn.addEventListener('click', () => appContainer.classList.toggle('hide-right'));
+
 
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

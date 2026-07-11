@@ -832,8 +832,8 @@ canvas#waveform {
     font-weight: 600;
 }
 
-/* ── Main Summary Area Tabs Layout ─────────────────────────────────────────── */
-.summary-area {
+/* ── Main Summary & Minutes Area Tabs Layout ────────────────────────────────── */
+.summary-area, .minutes-area {
     flex: 1;
     overflow-y: auto;
     padding: 24px 24px 140px 24px; /* bottom room for 110px control dock */
@@ -844,7 +844,7 @@ canvas#waveform {
     width: 100%;
 }
 
-.summary-card {
+.summary-card, .minutes-card {
     background: var(--bg-panel);
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
@@ -859,7 +859,7 @@ canvas#waveform {
     min-height: 400px;
 }
 
-.summary-placeholder {
+.summary-placeholder, .minutes-placeholder {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -869,21 +869,21 @@ canvas#waveform {
     margin: auto;
 }
 
-.summary-placeholder h3 {
+.summary-placeholder h3, .minutes-placeholder h3 {
     font-size: 18px;
     color: var(--text-primary);
     margin-bottom: 8px;
     font-weight: 600;
 }
 
-.summary-report-layout {
+.summary-report-layout, .minutes-report-layout {
     display: flex;
     flex-direction: column;
     height: 100%;
     width: 100%;
 }
 
-.summary-report-header {
+.summary-report-header, .minutes-report-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -892,29 +892,29 @@ canvas#waveform {
     gap: 12px;
 }
 
-.summary-report-title-group {
+.summary-report-title-group, .minutes-report-title-group {
     display: flex;
     align-items: center;
     gap: 14px;
 }
 
-.summary-report-title-group i {
+.summary-report-title-group i, .minutes-report-title-group i {
     font-size: 28px;
 }
 
-.summary-report-title-group h3 {
+.summary-report-title-group h3, .minutes-report-title-group h3 {
     font-size: 18px;
     color: var(--text-primary);
     margin: 0;
     font-weight: 600;
 }
 
-.summary-report-title-group span {
+.summary-report-title-group span, .minutes-report-title-group span {
     font-size: 12px;
     color: var(--text-secondary);
 }
 
-.summary-report-actions {
+.summary-report-actions, .minutes-report-actions {
     display: flex;
     gap: 8px;
 }
@@ -940,14 +940,14 @@ canvas#waveform {
     background: rgba(168, 85, 247, 0.1);
 }
 
-.summary-divider {
+.summary-divider, .minutes-divider {
     border: 0;
     height: 1px;
     background: var(--border-subtle);
     margin-bottom: 20px;
 }
 
-.summary-report-body {
+.summary-report-body, .minutes-report-body {
     line-height: 1.7;
     font-size: 14.5px;
     color: var(--text-secondary);
@@ -955,49 +955,51 @@ canvas#waveform {
     padding-right: 8px;
 }
 
-/* Beautiful spacing and colors inside main report */
-.summary-report-body h2, .summary-report-body h3 {
+/* Beautiful spacing and colors inside main reports */
+.summary-report-body h2, .summary-report-body h3,
+.minutes-report-body h2, .minutes-report-body h3 {
     color: var(--text-primary);
     margin-top: 24px;
     margin-bottom: 10px;
     font-weight: 600;
 }
 
-.summary-report-body h2 {
+.summary-report-body h2, .minutes-report-body h2 {
     font-size: 17px;
     border-left: 3px solid var(--purple-accent);
     padding-left: 10px;
 }
 
-.summary-report-body h3 {
+.summary-report-body h3, .minutes-report-body h3 {
     font-size: 15px;
 }
 
-.summary-report-body p {
+.summary-report-body p, .minutes-report-body p {
     margin-bottom: 12px;
 }
 
-.summary-report-body ul {
+.summary-report-body ul, .minutes-report-body ul {
     margin-left: 20px;
     margin-bottom: 16px;
     list-style-type: disc;
     padding-left: 4px;
 }
 
-.summary-report-body li {
+.summary-report-body li, .minutes-report-body li {
     margin-bottom: 8px;
     color: var(--text-secondary);
 }
 
-.summary-report-body li.nested-li {
+.summary-report-body li.nested-li, .minutes-report-body li.nested-li {
     margin-left: 20px;
     list-style-type: circle;
 }
 
-.summary-report-body strong {
+.summary-report-body strong, .minutes-report-body strong {
     color: var(--text-primary);
     font-weight: 600;
 }
+
 
 
 

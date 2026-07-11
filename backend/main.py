@@ -381,6 +381,103 @@ async def summarize_meeting(meeting_id: str):
         return {"error": "Failed to generate summary. Check server logs."}
 
 
+# ── Meeting Minutes (MoM) endpoint ──────────────────────────────────────────────
+@app.post("/api/meetings/{meeting_id}/minutes")
+async def generate_meeting_minutes(meeting_id: str):
+    """
+    Fetches the full transcript for a meeting from PostgreSQL and sends it
+    to a Groq-hosted LLM to generate formal Minutes of Meeting (MoM).
+    Returns the MoM text as JSON.
+
+    Uses httpx.AsyncClient to ensure non-blocking operation.
+    """
+    if not LLM_API_KEY:
+        return {"error": "Minutes of Meeting is not configured. Set LLM_API_KEY in .env."}
+
+    loop = asyncio.get_event_loop()
+
+    # 1. Fetch transcript from DB in executor thread
+    transcript_rows = await loop.run_in_executor(
+        None, lambda: get_meeting_transcript(meeting_id)
+    )
+
+    if not transcript_rows:
+        return {"error": "No transcript found for this meeting."}
+
+    # 2. Format transcript as dialogue block
+    lines = []
+    for row in transcript_rows:
+        speaker = row["speaker_label"] or "Unknown Speaker"
+        source  = row["source_text"]
+        translated = row["translated_text"]
+        lang = row["source_language"]
+
+        if lang != "en" and translated and translated != source:
+            lines.append(f"[{speaker}] {source} ({translated})")
+        else:
+            lines.append(f"[{speaker}] {source}")
+
+    transcript_block = "\n".join(lines)
+
+    # 3. Build MoM System Prompt
+    system_prompt = (
+        "You are an expert executive assistant and professional scribe. Your task is to analyze the provided meeting transcript and create a formal, highly accurate Minutes of Meeting (MoM) document.\n\n"
+        "**Instructions:**\n"
+        "*   Maintain a strictly objective, concise, and business-formal tone.\n"
+        "*   Filter out all small talk, pleasantries, filler words, and off-topic tangents.\n"
+        "*   If technical jargon or acronyms are used, preserve them accurately.\n\n"
+        "The MoM must contain the following structured sections in clean Markdown:\n\n"
+        "1. **Meeting Details**:\n"
+        "   * Include the Meeting Title, Date, Time, and Location/Platform (extract from transcript or note as [Not Provided]).\n"
+        "   * List of Attendees/Speakers.\n\n"
+        "2. **Executive Summary**:\n"
+        "   * A brief 2-3 sentence overview of the primary goal of the meeting and the core topics discussed.\n\n"
+        "3. **Detailed Discussion & Key Points**:\n"
+        "   * Break down the discussion by main topics using sub-headers.\n"
+        "   * Summarize the key arguments, insights, and data points under each topic.\n"
+        "   * Clearly attribute important statements, concerns, or proposals to the specific speaker who made them.\n\n"
+        "4. **Decisions Made**:\n"
+        "   * A formal, bulleted list of all agreed-upon decisions and approvals.\n\n"
+        "5. **Action Items**:\n"
+        "   * Create a clear table or bulleted list of action items.\n"
+        "   * Format as: **[Action Item]** - **[Owner]** - **[Deadline (if mentioned, otherwise \"TBD\")]**.\n\n"
+        "6. **Parking Lot / Next Steps**:\n"
+        "   * Any unresolved issues tabled for future discussion, and the date/time of the next meeting (if mentioned)."
+    )
+
+    # 4. Call LLM
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL_NAME,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Meeting Transcript:\n\n{transcript_block}"},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 2048,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            minutes = data["choices"][0]["message"]["content"]
+            logger.info("[MoM] Generated Minutes of Meeting for %s (%d utterances)", meeting_id, len(transcript_rows))
+            return {"minutes": minutes, "utterance_count": len(transcript_rows)}
+
+    except httpx.HTTPStatusError as e:
+        logger.error("[MoM] LLM API returned %s: %s", e.response.status_code, e.response.text[:200])
+        return {"error": f"LLM API error: {e.response.status_code}"}
+    except Exception:
+        logger.exception("[MoM] Failed to generate MoM.")
+        return {"error": "Failed to generate Minutes of Meeting. Check server logs."}
+
+
 # ── REST endpoints ─────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
