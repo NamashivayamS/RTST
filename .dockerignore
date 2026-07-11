@@ -1,0 +1,39 @@
+# .dockerignore
+# ==============================================================================
+# Prevents files and directories from being sent to the Docker daemon during build.
+# This keeps the build context small and prevents local configuration secrets, virtual 
+# environments, logs, and database files from being baked into the Docker image.
+# ==============================================================================
+
+# Exclude local virtual environments (Docker installs packages inside its own filesystem)
+venv/
+.venv/
+
+# Exclude local environment secrets (secrets must be provided at runtime via environment or .env)
+.env
+
+# Exclude cache folders
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Exclude developer version control files
+.git/
+.gitignore
+
+# Exclude telemetry, logs, and local database storage directories
+logs/
+temp_audio/
+secure_vault/
+feedback_reports.jsonl
+
+# Exclude developer draft directories and scratch files
+scratch/
+tests/
+training_pipeline/
+developer_private.key
+server_private.key
+reports_dashboard.html
+decrypted_audio/
