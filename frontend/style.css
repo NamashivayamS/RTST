@@ -787,3 +787,49 @@ canvas#waveform {
     }
 }
 
+/* ── AI Summary Rendered CSS ────────────────────────────────────────────────── */
+#summaryText h2, #summaryText h3, #summaryText h4 {
+    color: var(--text-primary);
+    margin-top: 14px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+#summaryText h2 {
+    font-size: 15px;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 4px;
+}
+#summaryText h3 {
+    font-size: 13.5px;
+}
+#summaryText h4 {
+    font-size: 12.5px;
+}
+#summaryText p {
+    margin-bottom: 8px;
+    line-height: 1.6;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+#summaryText ul {
+    margin-left: 16px;
+    margin-bottom: 12px;
+    list-style-type: disc;
+    padding-left: 4px;
+}
+#summaryText li {
+    margin-bottom: 6px;
+    line-height: 1.5;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+#summaryText li.nested-li {
+    margin-left: 16px;
+    list-style-type: circle;
+}
+#summaryText strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+

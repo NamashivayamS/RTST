@@ -628,6 +628,68 @@ const summarizeBtn = document.getElementById('summarizeBtn');
 const summaryPanel = document.getElementById('summaryPanel');
 const summaryText = document.getElementById('summaryText');
 const copySummaryBtn = document.getElementById('copySummaryBtn');
+const downloadSummaryBtn = document.getElementById('downloadSummaryBtn');
+
+let rawSummaryMarkdown = '';
+
+// A lightweight markdown to HTML converter for professional layout
+function parseSummaryMarkdown(markdown) {
+    const lines = markdown.split('\n');
+    let html = '';
+    let inList = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trimEnd();
+        
+        // Handle Headers
+        if (line.startsWith('### ')) {
+            if (inList) { html += '</ul>'; inList = false; }
+            html += `<h3>${parseInlineMarkdown(line.slice(4))}</h3>`;
+            continue;
+        }
+        if (line.startsWith('## ') || line.startsWith('# ')) {
+            if (inList) { html += '</ul>'; inList = false; }
+            const headerText = line.startsWith('## ') ? line.slice(3) : line.slice(2);
+            html += `<h2>${parseInlineMarkdown(headerText)}</h2>`;
+            continue;
+        }
+
+        // Handle List Items
+        const listMatch = line.match(/^(\s*)([*+-])\s+(.*)$/);
+        if (listMatch) {
+            const indent = listMatch[1].length;
+            const content = parseInlineMarkdown(listMatch[3]);
+            if (!inList) {
+                html += '<ul>';
+                inList = true;
+            }
+            if (indent > 0) {
+                html += `<li class="nested-li">${content}</li>`;
+            } else {
+                html += `<li>${content}</li>`;
+            }
+            continue;
+        }
+
+        // Close list if we hit a blank line or paragraph
+        if (line.trim() === '') {
+            if (inList) { html += '</ul>'; inList = false; }
+            continue;
+        }
+
+        // Default Paragraph
+        if (inList) { html += '</ul>'; inList = false; }
+        html += `<p>${parseInlineMarkdown(line.trim())}</p>`;
+    }
+
+    if (inList) { html += '</ul>'; }
+    return html;
+}
+
+function parseInlineMarkdown(text) {
+    // Convert **bold** to <strong>bold</strong>
+    return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+}
 
 summarizeBtn.addEventListener('click', async () => {
     if (!currentMeetingId) { alert('No active meeting to summarize.'); return; }
@@ -644,7 +706,8 @@ summarizeBtn.addEventListener('click', async () => {
         if (data.error) {
             alert('Summarization failed: ' + data.error);
         } else if (data.summary) {
-            summaryText.innerText = data.summary;
+            rawSummaryMarkdown = data.summary;
+            summaryText.innerHTML = parseSummaryMarkdown(data.summary);
             summaryPanel.style.display = 'block';
         }
     } catch (err) {
@@ -656,14 +719,26 @@ summarizeBtn.addEventListener('click', async () => {
 });
 
 copySummaryBtn.addEventListener('click', () => {
-    const text = summaryText.innerText;
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
+    if (!rawSummaryMarkdown) return;
+    navigator.clipboard.writeText(rawSummaryMarkdown).then(() => {
         const origHTML = copySummaryBtn.innerHTML;
         copySummaryBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
         setTimeout(() => { copySummaryBtn.innerHTML = origHTML; }, 1500);
     });
 });
+
+downloadSummaryBtn.addEventListener('click', () => {
+    if (!rawSummaryMarkdown) { alert('No summary available to download.'); return; }
+    const blob = new Blob([rawSummaryMarkdown], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+        href: url,
+        download: `meeting_summary_${currentMeetingId}.txt`
+    });
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
 
 
 // ── View Mode Toggles ─────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@
     <title>iSpeak Global - Real-Time Neural Translation</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=14">
+    <link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 
 <body class="dark-theme">
@@ -215,12 +215,18 @@
             <div class="panel" id="summaryPanel" style="display: none;">
                 <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
                     <h3 style="margin-bottom: 0;">AI SUMMARY</h3>
-                    <button id="copySummaryBtn" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; transition: 0.2s;" title="Copy summary">
-                        <i class="fa-regular fa-copy"></i> Copy
-                    </button>
+                    <div style="display: flex; gap: 6px;">
+                        <button id="copySummaryBtn" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; transition: 0.2s;" title="Copy summary">
+                            <i class="fa-regular fa-copy"></i> Copy
+                        </button>
+                        <button id="downloadSummaryBtn" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; transition: 0.2s;" title="Download summary as TXT">
+                            <i class="fa-solid fa-download"></i> Download
+                        </button>
+                    </div>
                 </div>
-                <div id="summaryText" style="font-size: 13px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; max-height: 320px; overflow-y: auto; margin-top: 8px;"></div>
+                <div id="summaryText" style="font-size: 13px; color: var(--text-secondary); line-height: 1.6; max-height: 320px; overflow-y: auto; margin-top: 8px;"></div>
             </div>
+
 
 
             <div class="panel connection-status">
@@ -234,7 +240,7 @@
             </div>
         </aside>
     </div>
-    <script src="/static/app.js?v=15"></script>
+    <script src="/static/app.js?v=16"></script>
 </body>
 
 </html>
