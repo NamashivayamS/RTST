@@ -94,7 +94,7 @@ import httpx
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
 from database.connection import init_pool, close_pool   # Fix 1: pool lifecycle
-from database.queries import create_meeting, save_utterance, rename_speaker_label, merge_speaker_utterances, get_meeting_transcript
+from database.queries import create_meeting, save_utterance, rename_speaker_label, merge_speaker_utterances, get_meeting_transcript, get_meeting_details
 from auth import validate_ws_token, reject_websocket, set_runtime_token
 from report_writer import (                             # Fix 6: thread-safe writer
     start_report_writer, stop_report_writer, enqueue_report
@@ -396,13 +396,27 @@ async def generate_meeting_minutes(meeting_id: str):
 
     loop = asyncio.get_event_loop()
 
-    # 1. Fetch transcript from DB in executor thread
+    # 1. Fetch transcript and meeting details from DB in executor threads
     transcript_rows = await loop.run_in_executor(
         None, lambda: get_meeting_transcript(meeting_id)
     )
-
     if not transcript_rows:
         return {"error": "No transcript found for this meeting."}
+
+    meeting_meta = await loop.run_in_executor(
+        None, lambda: get_meeting_details(meeting_id)
+    )
+    meeting_title = "Live Translation Session"
+    meeting_date_str = "[Not Provided]"
+    meeting_time_str = "[Not Provided]"
+
+    if meeting_meta:
+        if meeting_meta.get("title"):
+            meeting_title = meeting_meta["title"]
+        created_at = meeting_meta.get("created_at")
+        if created_at:
+            meeting_date_str = created_at.strftime("%B %d, %Y")
+            meeting_time_str = created_at.strftime("%I:%M %p")
 
     # 2. Format transcript as dialogue block
     lines = []
@@ -447,6 +461,15 @@ async def generate_meeting_minutes(meeting_id: str):
 
     # 4. Call LLM
     try:
+        user_message_content = (
+            f"Here are the known meeting details from the database:\n"
+            f"- Title: {meeting_title}\n"
+            f"- Date: {meeting_date_str}\n"
+            f"- Time: {meeting_time_str}\n"
+            f"- Location/Platform: Web App (iSpeak Global)\n\n"
+            f"Meeting Transcript:\n\n{transcript_block}"
+        )
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 f"{LLM_BASE_URL}/chat/completions",
@@ -458,7 +481,7 @@ async def generate_meeting_minutes(meeting_id: str):
                     "model": LLM_MODEL_NAME,
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Meeting Transcript:\n\n{transcript_block}"},
+                        {"role": "user", "content": user_message_content},
                     ],
                     "temperature": 0.3,
                     "max_tokens": 2048,

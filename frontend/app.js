@@ -662,10 +662,34 @@ function parseSummaryMarkdown(markdown) {
     const lines = markdown.split('\n');
     let html = '';
     let inList = false;
+    let inTable = false;
+    let tableRows = [];
 
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trimEnd();
-        
+        let trimmed = line.trim();
+
+        // If we are currently in a table block
+        if (inTable) {
+            if (trimmed.startsWith('|')) {
+                tableRows.push(trimmed);
+                continue;
+            } else {
+                // End of table block: process it
+                html += renderHTMLTable(tableRows);
+                tableRows = [];
+                inTable = false;
+            }
+        }
+
+        // If we are starting a table block
+        if (!inTable && trimmed.startsWith('|')) {
+            if (inList) { html += '</ul>'; inList = false; }
+            inTable = true;
+            tableRows.push(trimmed);
+            continue;
+        }
+
         // Handle Headers
         if (line.startsWith('### ')) {
             if (inList) { html += '</ul>'; inList = false; }
@@ -708,6 +732,67 @@ function parseSummaryMarkdown(markdown) {
     }
 
     if (inList) { html += '</ul>'; }
+    if (inTable && tableRows.length > 0) {
+        html += renderHTMLTable(tableRows);
+    }
+    return html;
+}
+
+function renderHTMLTable(rows) {
+    if (rows.length === 0) return '';
+    
+    const parseCells = (row) => {
+        let cells = row.split('|').map(c => c.trim());
+        if (cells[0] === '') cells.shift();
+        if (cells[cells.length - 1] === '') cells.pop();
+        return cells;
+    };
+
+    let hasHeader = false;
+    let headerCells = [];
+
+    if (rows.length > 1) {
+        let secondRow = rows[1];
+        let cleaned = secondRow.replace(/[|:\-\s]/g, '');
+        if (cleaned === '') {
+            hasHeader = true;
+            headerCells = parseCells(rows[0]);
+        }
+    }
+
+    let html = '<div class="table-container"><table>';
+    
+    if (hasHeader) {
+        html += '<thead><tr>';
+        headerCells.forEach(cell => {
+            html += `<th>${parseInlineMarkdown(cell)}</th>`;
+        });
+        html += '</tr></thead>';
+        
+        html += '<tbody>';
+        for (let i = 2; i < rows.length; i++) {
+            let cells = parseCells(rows[i]);
+            html += '<tr>';
+            cells.forEach(cell => {
+                html += `<td>${parseInlineMarkdown(cell)}</td>`;
+            });
+            html += '</tr>';
+        }
+        html += '</tbody>';
+    } else {
+        html += '<tbody>';
+        rows.forEach(row => {
+            let cells = parseCells(row);
+            html += '<tr>';
+            cells.forEach(cell => {
+                html += `<td>${parseInlineMarkdown(cell)}</td>`;
+            });
+            html += '</tr>';
+        });
+        html += '</tbody>';
+    }
+    
+    html += '</table></div>';
     return html;
 }
 

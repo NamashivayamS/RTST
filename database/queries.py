@@ -514,6 +514,37 @@ def delete_global_speaker_profile(profile_id: str) -> None:
             release_connection(conn)
 
 
+def get_meeting_details(meeting_id: str) -> dict | None:
+    """
+    Fetches the title and creation time of a meeting.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT title, created_at
+            FROM meetings
+            WHERE id = %s;
+            """,
+            (meeting_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "title": row["title"],
+                "created_at": row["created_at"]
+            }
+        return None
+    except Exception:
+        logger.exception("[DB] get_meeting_details failed.")
+        return None
+    finally:
+        if conn:
+            release_connection(conn)
+
+
 def get_meeting_transcript(meeting_id: str) -> list[dict]:
     """
     Fetches all utterances for a meeting, ordered chronologically.
