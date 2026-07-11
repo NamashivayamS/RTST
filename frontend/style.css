@@ -836,7 +836,7 @@ canvas#waveform {
 .summary-area {
     flex: 1;
     overflow-y: auto;
-    padding: 24px;
+    padding: 24px 24px 140px 24px; /* bottom room for 110px control dock */
     display: flex;
     justify-content: center;
     background: var(--bg-main);
