@@ -127,6 +127,13 @@ DEFAULT_DEPARTMENT_ID = os.environ.get(
 # In development: leave empty → allows all origins (works out-of-the-box).
 CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "")
 
+# ── LLM Summarization (Groq / xAI / any OpenAI-compatible API) ────────────────
+# Used by the /api/meetings/{id}/summarize endpoint.
+# Set LLM_API_KEY to enable meeting summarization. Leave empty to disable.
+LLM_API_KEY    = os.environ.get("LLM_API_KEY", "")
+LLM_BASE_URL   = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "llama-3.1-8b-instant")
+
 # ── Encryption key path (env-first, dev fallback) ─────────────────────────────
 # Point this at wherever server_public.key lives on your deployment machine.
 SERVER_PUBLIC_KEY_PATH = os.environ.get(

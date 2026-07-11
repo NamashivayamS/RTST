@@ -512,3 +512,48 @@ def delete_global_speaker_profile(profile_id: str) -> None:
     finally:
         if conn:
             release_connection(conn)
+
+
+def get_meeting_transcript(meeting_id: str) -> list[dict]:
+    """
+    Fetches all utterances for a meeting, ordered chronologically.
+    Used by the summarization endpoint to build the full transcript.
+
+    Returns:
+        list of dicts with keys: speaker_label, source_text, translated_text,
+        source_language, target_language, utterance_time
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT speaker_label, source_text, translated_text,
+                   source_language, target_language, utterance_time
+            FROM utterances
+            WHERE meeting_id = %s
+            ORDER BY utterance_time ASC;
+            """,
+            (meeting_id,),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "speaker_label": row["speaker_label"],
+                "source_text": row["source_text"],
+                "translated_text": row["translated_text"],
+                "source_language": row["source_language"],
+                "target_language": row["target_language"],
+                "utterance_time": str(row["utterance_time"]),
+            }
+            for row in rows
+        ]
+
+    except Exception:
+        logger.exception("[DB] get_meeting_transcript failed.")
+        return []
+
+    finally:
+        if conn:
+            release_connection(conn)

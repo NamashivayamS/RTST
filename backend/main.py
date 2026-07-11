@@ -87,12 +87,14 @@ from config import (
     TURN_TAKING_SILENCE_SEC,     # controls language lock + window clear threshold
     ENABLE_SLIDING_WINDOW,       # master switch for two-pass window translation
     CORS_ALLOWED_ORIGINS,        # comma-separated allowed origins for CORS
+    LLM_API_KEY, LLM_BASE_URL, LLM_MODEL_NAME,
 )
+import httpx
 
 from backend.connection_manager import ConnectionManager
 from services.router_service import RouterService
 from database.connection import init_pool, close_pool   # Fix 1: pool lifecycle
-from database.queries import create_meeting, save_utterance, rename_speaker_label, merge_speaker_utterances
+from database.queries import create_meeting, save_utterance, rename_speaker_label, merge_speaker_utterances, get_meeting_transcript
 from auth import validate_ws_token, reject_websocket, set_runtime_token
 from report_writer import (                             # Fix 6: thread-safe writer
     start_report_writer, stop_report_writer, enqueue_report
@@ -297,6 +299,86 @@ def report_mistake(report: FeedbackReport):
     enqueue_report(report_data)
 
     return {"status": "success", "message": "Report logged"}
+
+
+# ── Meeting summarization endpoint ─────────────────────────────────────────────
+@app.post("/api/meetings/{meeting_id}/summarize")
+async def summarize_meeting(meeting_id: str):
+    """
+    Fetches the full transcript for a meeting from PostgreSQL and sends it
+    to a Groq-hosted LLM for summarization. Returns the summary as JSON.
+
+    Uses httpx.AsyncClient so the request is non-blocking — all active
+    WebSocket translation streams continue uninterrupted.
+    """
+    if not LLM_API_KEY:
+        return {"error": "Summarization is not configured. Set LLM_API_KEY in .env."}
+
+    loop = asyncio.get_event_loop()
+
+    # 1. Fetch transcript from DB on a background thread
+    transcript_rows = await loop.run_in_executor(
+        None, lambda: get_meeting_transcript(meeting_id)
+    )
+
+    if not transcript_rows:
+        return {"error": "No transcript found for this meeting."}
+
+    # 2. Format transcript as a clean dialogue block
+    lines = []
+    for row in transcript_rows:
+        speaker = row["speaker_label"] or "Unknown Speaker"
+        source  = row["source_text"]
+        translated = row["translated_text"]
+        lang = row["source_language"]
+
+        # Show both source and translation when they differ
+        if lang != "en" and translated and translated != source:
+            lines.append(f"[{speaker}] {source} ({translated})")
+        else:
+            lines.append(f"[{speaker}] {source}")
+
+    transcript_block = "\n".join(lines)
+
+    # 3. Build the LLM prompt
+    system_prompt = (
+        "You are a professional meeting summarizer. "
+        "Given the following meeting transcript, produce a clear and concise summary. "
+        "Include: key discussion points, decisions made, action items, and participants mentioned. "
+        "Use bullet points for clarity. Keep the summary under 500 words."
+    )
+
+    # 4. Call the Groq API asynchronously
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL_NAME,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Meeting Transcript:\n\n{transcript_block}"},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 1024,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            summary = data["choices"][0]["message"]["content"]
+            logger.info("[Summarize] Generated summary for meeting %s (%d utterances)", meeting_id, len(transcript_rows))
+            return {"summary": summary, "utterance_count": len(transcript_rows)}
+
+    except httpx.HTTPStatusError as e:
+        logger.error("[Summarize] LLM API returned %s: %s", e.response.status_code, e.response.text[:200])
+        return {"error": f"LLM API error: {e.response.status_code}"}
+    except Exception:
+        logger.exception("[Summarize] Failed to generate summary.")
+        return {"error": "Failed to generate summary. Check server logs."}
 
 
 # ── REST endpoints ─────────────────────────────────────────────────────────────

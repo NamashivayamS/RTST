@@ -623,6 +623,49 @@ exportTxtBtn.addEventListener('click', () => {
     URL.revokeObjectURL(url);
 });
 
+// ── Summarize Meeting ─────────────────────────────────────────────────────────
+const summarizeBtn = document.getElementById('summarizeBtn');
+const summaryPanel = document.getElementById('summaryPanel');
+const summaryText = document.getElementById('summaryText');
+const copySummaryBtn = document.getElementById('copySummaryBtn');
+
+summarizeBtn.addEventListener('click', async () => {
+    if (!currentMeetingId) { alert('No active meeting to summarize.'); return; }
+
+    // Show loading state
+    summarizeBtn.disabled = true;
+    const originalHTML = summarizeBtn.innerHTML;
+    summarizeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> <span>Summarizing...</span>';
+
+    try {
+        const response = await fetch(`/api/meetings/${currentMeetingId}/summarize`, { method: 'POST' });
+        const data = await response.json();
+
+        if (data.error) {
+            alert('Summarization failed: ' + data.error);
+        } else if (data.summary) {
+            summaryText.innerText = data.summary;
+            summaryPanel.style.display = 'block';
+        }
+    } catch (err) {
+        alert('Summarization request failed: ' + err.message);
+    } finally {
+        summarizeBtn.disabled = false;
+        summarizeBtn.innerHTML = originalHTML;
+    }
+});
+
+copySummaryBtn.addEventListener('click', () => {
+    const text = summaryText.innerText;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+        const origHTML = copySummaryBtn.innerHTML;
+        copySummaryBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        setTimeout(() => { copySummaryBtn.innerHTML = origHTML; }, 1500);
+    });
+});
+
+
 // ── View Mode Toggles ─────────────────────────────────────────────────────────
 const viewSingleBtn = document.getElementById('viewSingleBtn');
 const viewSplitBtn = document.getElementById('viewSplitBtn');
