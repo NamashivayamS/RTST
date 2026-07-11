@@ -251,7 +251,6 @@ trainer==0.0.36
 traitlets==5.15.0
 transformers==4.46.1
 transformers-stream-generator==0.0.5
-TTS @ git+https://github.com/coqui-ai/TTS.git@dbf1a08a0d4e47fdad6172e433eeb34bc6b13b4e
 typeguard==4.5.2
 typer==0.25.1
 typing-inspection==0.4.2
