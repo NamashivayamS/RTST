@@ -1,19 +1,20 @@
-from database.connection import get_connection
+from database.connection import init_pool, get_connection, release_connection
 
 try:
+    init_pool()
     conn = get_connection()
 
     cur = conn.cursor()
 
-    cur.execute("SELECT NOW();")
+    cur.execute("SELECT CURRENT_TIMESTAMP;")
 
     result = cur.fetchone()
 
     print("Connected Successfully")
-    print(result)
+    print(result[0])
 
-    conn.close()
+    release_connection(conn)
 
 except Exception as e:
     print("Connection Failed")
-    print(e)
+    print(e)

@@ -1,8 +1,8 @@
 # database/queries.py
 """
-All PostgreSQL queries for RealTimeSpeechTranslator.
+All MS SQL Server queries for RealTimeSpeechTranslator (pyodbc).
 
-Connection discipline
+Connection discipline (unchanged from the Postgres version)
 ─────────────────────
 Every function borrows a connection from the pool via get_connection(),
 does its work, commits (or rolls back on error), then releases the
@@ -10,21 +10,28 @@ connection back to the pool in the finally block.
 
 NEVER call conn.close() here — that would destroy a pool connection
 rather than returning it. Always call release_connection(conn).
-
-Thread safety
-─────────────
-These functions run on background threads via loop.run_in_executor().
-psycopg2.ThreadedConnectionPool is thread-safe for borrow/return operations,
-and individual connections are never shared across threads, so this is safe.
 """
 
 import logging
 import numpy as np
-import psycopg2
 from database.connection import get_connection, release_connection
 from config import DEFAULT_DEPARTMENT_ID
 
 logger = logging.getLogger("ispeak.db")
+
+
+def _row_to_dict(cursor, row) -> dict | None:
+    """pyodbc rows are positional tuples, not dicts like psycopg2's RealDictCursor —
+    zip with cursor.description to restore row['column_name'] access everywhere below."""
+    if row is None:
+        return None
+    columns = [col[0] for col in cursor.description]
+    return dict(zip(columns, row))
+
+
+def _rows_to_dicts(cursor, rows) -> list[dict]:
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
 
 
 def create_meeting(
@@ -42,28 +49,23 @@ def create_meeting(
         cur.execute(
             """
             INSERT INTO meetings (title, department_id)
-            VALUES (%s, %s)
-            RETURNING id;
+            OUTPUT INSERTED.id
+            VALUES (?, ?);
             """,
             (title, department_id),
         )
-        meeting_id = cur.fetchone()["id"]
+        meeting_id = str(cur.fetchone()[0]).lower()
         conn.commit()
         logger.info(f"[DB] Meeting created: {meeting_id}")
         return meeting_id
 
     except Exception:
-        # Roll back so the connection is clean before it goes back to the pool.
-        # Without this, a failed transaction leaves the connection in an error
-        # state that causes every subsequent query on that connection to fail
-        # with "InFailedSqlTransaction".
         if conn:
             conn.rollback()
         logger.exception("[DB] create_meeting failed — rolled back.")
         raise
 
     finally:
-        # Always release — even if an exception was raised above.
         release_connection(conn)
 
 
@@ -89,29 +91,15 @@ def save_utterance(
             """
             INSERT INTO utterances
             (
-                meeting_id,
-                utterance_time,
-                source_language,
-                target_language,
-                source_text,
-                translated_text,
-                total_latency_ms,
-                speaker_label,
-                speaker_id
+                meeting_id, utterance_time, source_language, target_language,
+                source_text, translated_text, total_latency_ms,
+                speaker_label, speaker_id
             )
+            OUTPUT INSERTED.id
             VALUES
             (
-                %s,
-                CURRENT_TIMESTAMP,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s,
-                %s
-            )
-            RETURNING id;
+                ?, SYSUTCDATETIME(), ?, ?, ?, ?, ?, ?, ?
+            );
             """,
             (
                 meeting_id,
@@ -124,7 +112,7 @@ def save_utterance(
                 speaker_id,
             ),
         )
-        utterance_id = cur.fetchone()["id"]
+        utterance_id = str(cur.fetchone()[0]).lower()
         conn.commit()
         logger.debug(f"[DB] Utterance saved: {utterance_id} (meeting={meeting_id})")
         return utterance_id
@@ -156,9 +144,9 @@ def rename_speaker_label(
         cur.execute(
             """
             UPDATE utterances
-            SET speaker_label = %s
-            WHERE meeting_id = %s
-              AND speaker_id = %s;
+            SET speaker_label = ?
+            WHERE meeting_id = ?
+              AND speaker_id = ?;
             """,
             (new_label, meeting_id, speaker_id),
         )
@@ -198,9 +186,9 @@ def merge_speaker_utterances(
         cur.execute(
             """
             UPDATE utterances
-            SET speaker_id = %s, speaker_label = %s
-            WHERE meeting_id = %s
-              AND speaker_id = %s;
+            SET speaker_id = ?, speaker_label = ?
+            WHERE meeting_id = ?
+              AND speaker_id = ?;
             """,
             (target_id, target_name, meeting_id, source_id),
         )
@@ -245,25 +233,27 @@ def load_global_speaker_profiles(model_version: str, embedding_dim: int) -> dict
                    t.id AS template_id, t.embedding, t.is_primary
             FROM global_speaker_profiles p
             JOIN speaker_voice_templates t ON t.speaker_id = p.id
-            WHERE p.model_version = %s AND p.embedding_dim = %s
+            WHERE p.model_version = ? AND p.embedding_dim = ?
             ORDER BY p.id, t.is_primary DESC, t.created_at ASC;
             """,
-            (model_version, embedding_dim)
+            (model_version, embedding_dim),
         )
-        rows = cur.fetchall()
+        rows = _rows_to_dicts(cur, cur.fetchall())
         for row in rows:
-            pid = str(row["profile_id"])
+            pid = str(row["profile_id"]).lower()
             if pid not in profiles:
                 profiles[pid] = {
                     "name": row["speaker_name"],
                     "templates": [],
-                    "primary_index": 0
+                    "primary_index": 0,
                 }
-            emb_bytes = bytes(row["embedding"])
+            # pyodbc already returns VARBINARY columns as Python `bytes` directly —
+            # the bytes(...) wrapper from the psycopg2 version is no longer needed.
+            emb_bytes = row["embedding"]
             profiles[pid]["templates"].append({
-                "template_id": str(row["template_id"]),
+                "template_id": str(row["template_id"]).lower(),
                 "embedding": np.frombuffer(emb_bytes, dtype=np.float32),
-                "is_primary": row["is_primary"]
+                "is_primary": bool(row["is_primary"]),
             })
 
         # Fix up primary_index for each profile
@@ -298,7 +288,7 @@ def create_global_speaker_profile(
     needed so enroll_speaker's Case 3 can preserve the local temp UUID's identity
     (the local meeting_profiles dict, any already-saved utterance rows, and the
     frontend's rendered speaker_id all stay valid without a remap/merge broadcast).
-    If profile_id is None, Postgres generates a fresh UUID via the column default.
+    If profile_id is None, NEWID() generates a fresh UUID.
 
     Returns the new profile_id as a string either way.
     """
@@ -312,33 +302,33 @@ def create_global_speaker_profile(
             cur.execute(
                 """
                 INSERT INTO global_speaker_profiles (id, speaker_name, model_version, embedding_dim)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id;
+                OUTPUT INSERTED.id
+                VALUES (?, ?, ?, ?);
                 """,
                 (profile_id, speaker_name, model_version, embedding_dim),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO global_speaker_profiles (speaker_name, model_version, embedding_dim)
-                VALUES (%s, %s, %s)
-                RETURNING id;
+                INSERT INTO global_speaker_profiles (id, speaker_name, model_version, embedding_dim)
+                OUTPUT INSERTED.id
+                VALUES (NEWID(), ?, ?, ?);
                 """,
                 (speaker_name, model_version, embedding_dim),
             )
-        result_id = str(cur.fetchone()["id"])
+        result_id = str(cur.fetchone()[0]).lower()
 
         # 2. Insert primary template
         emb_bytes = primary_embedding.tobytes()
         cur.execute(
             """
             INSERT INTO speaker_voice_templates (speaker_id, embedding, is_primary)
-            VALUES (%s, %s, TRUE)
-            RETURNING id;
+            OUTPUT INSERTED.id
+            VALUES (?, ?, 1);
             """,
-            (result_id, psycopg2.Binary(emb_bytes)),
+            (result_id, emb_bytes),
         )
-        template_id = str(cur.fetchone()["id"])
+        template_id = str(cur.fetchone()[0]).lower()
 
         conn.commit()
         logger.info(
@@ -377,17 +367,17 @@ def add_speaker_template(
         cur.execute(
             """
             INSERT INTO speaker_voice_templates (speaker_id, embedding, is_primary)
-            VALUES (%s, %s, FALSE)
-            RETURNING id;
+            OUTPUT INSERTED.id
+            VALUES (?, ?, 0);
             """,
-            (profile_id, psycopg2.Binary(emb_bytes)),
+            (profile_id, emb_bytes),
         )
-        template_id = str(cur.fetchone()["id"])
+        template_id = str(cur.fetchone()[0]).lower()
 
         cur.execute(
             """
             INSERT INTO speaker_template_events (speaker_id, action, similarity)
-            VALUES (%s, 'added', %s);
+            VALUES (?, 'added', ?);
             """,
             (profile_id, similarity),
         )
@@ -427,24 +417,24 @@ def evict_speaker_template(
 
         # Safety check: never evict the primary template
         cur.execute(
-            "SELECT is_primary FROM speaker_voice_templates WHERE id = %s;",
+            "SELECT is_primary FROM speaker_voice_templates WHERE id = ?;",
             (template_id,),
         )
         row = cur.fetchone()
         assert row is not None, f"Template {template_id} not found in database"
-        assert not row["is_primary"], (
+        assert not bool(row[0]), (
             f"Attempted to evict primary template {template_id} for speaker {speaker_id} — this is a bug"
         )
 
         cur.execute(
-            "DELETE FROM speaker_voice_templates WHERE id = %s;",
+            "DELETE FROM speaker_voice_templates WHERE id = ?;",
             (template_id,),
         )
 
         cur.execute(
             """
             INSERT INTO speaker_template_events (speaker_id, action, similarity)
-            VALUES (%s, 'evicted', %s);
+            VALUES (?, 'evicted', ?);
             """,
             (speaker_id, similarity),
         )
@@ -477,8 +467,8 @@ def update_global_speaker_name(profile_id: str, new_name: str) -> None:
         cur.execute(
             """
             UPDATE global_speaker_profiles
-            SET speaker_name = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE id = %s;
+            SET speaker_name = ?, updated_at = SYSUTCDATETIME()
+            WHERE id = ?;
             """,
             (new_name, profile_id),
         )
@@ -502,7 +492,7 @@ def delete_global_speaker_profile(profile_id: str) -> None:
     try:
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM global_speaker_profiles WHERE id = %s;", (profile_id,))
+        cur.execute("DELETE FROM global_speaker_profiles WHERE id = ?;", (profile_id,))
         conn.commit()
         logger.info(f"[DB] Deleted global speaker profile: {profile_id}")
     except Exception:
@@ -526,16 +516,14 @@ def get_meeting_details(meeting_id: str) -> dict | None:
             """
             SELECT title, created_at
             FROM meetings
-            WHERE id = %s;
+            WHERE id = ?;
             """,
             (meeting_id,),
         )
         row = cur.fetchone()
         if row:
-            return {
-                "title": row["title"],
-                "created_at": row["created_at"]
-            }
+            d = _row_to_dict(cur, row)
+            return {"title": d["title"], "created_at": d["created_at"]}
         return None
     except Exception:
         logger.exception("[DB] get_meeting_details failed.")
@@ -563,22 +551,22 @@ def get_meeting_transcript(meeting_id: str) -> list[dict]:
             SELECT speaker_label, source_text, translated_text,
                    source_language, target_language, utterance_time
             FROM utterances
-            WHERE meeting_id = %s
+            WHERE meeting_id = ?
             ORDER BY utterance_time ASC;
             """,
             (meeting_id,),
         )
-        rows = cur.fetchall()
+        rows = _rows_to_dicts(cur, cur.fetchall())
         return [
             {
-                "speaker_label": row["speaker_label"],
-                "source_text": row["source_text"],
-                "translated_text": row["translated_text"],
-                "source_language": row["source_language"],
-                "target_language": row["target_language"],
-                "utterance_time": str(row["utterance_time"]),
+                "speaker_label": r["speaker_label"],
+                "source_text": r["source_text"],
+                "translated_text": r["translated_text"],
+                "source_language": r["source_language"],
+                "target_language": r["target_language"],
+                "utterance_time": str(r["utterance_time"]),
             }
-            for row in rows
+            for r in rows
         ]
 
     except Exception:

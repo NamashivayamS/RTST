@@ -3,6 +3,9 @@
 #Central configuration for all tunable thresholds and logic gates.
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
@@ -69,10 +72,13 @@ ENVIRONMENT_PRESETS = {
 # ── Database credentials (env-first, dev fallback) ────────────────────────────
 # In production: set these as real environment variables.
 # In development: the fallback values below are used automatically.
-POSTGRES_HOST     = os.environ.get("POSTGRES_HOST",     "localhost")
-POSTGRES_DB       = os.environ.get("POSTGRES_DB",       "ispeak_global")
-POSTGRES_USER     = os.environ.get("POSTGRES_USER",     "postgres")
-POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "1234")      # dev only
+MSSQL_HOST     = os.environ.get("MSSQL_HOST",     "localhost")
+MSSQL_PORT     = os.environ.get("MSSQL_PORT",     "1433")
+MSSQL_DB       = os.environ.get("MSSQL_DB",       "ispeak_global")
+MSSQL_USER     = os.environ.get("MSSQL_USER",     "sa")
+MSSQL_PASSWORD = os.environ.get("MSSQL_PASSWORD", "1234")      # dev only
+MSSQL_DRIVER   = os.environ.get("MSSQL_DRIVER",   "{ODBC Driver 18 for SQL Server}")
+MSSQL_ENCRYPT  = os.environ.get("MSSQL_ENCRYPT",  "yes")        # "yes"/"no"
 
 DEFAULT_DEPARTMENT_ID = os.environ.get(
     "DEFAULT_DEPARTMENT_ID",
@@ -100,7 +106,7 @@ SERVER_PUBLIC_KEY_PATH = os.environ.get(
 # This ensures the company server never runs with dev fallback credentials.
 if ENVIRONMENT == "production":
     _REQUIRED_ENV = [
-        "POSTGRES_PASSWORD", "POSTGRES_USER",
+        "MSSQL_PASSWORD", "MSSQL_USER",
         "DEFAULT_DEPARTMENT_ID", "SESSION_TOKEN",
     ]
     for _var in _REQUIRED_ENV:

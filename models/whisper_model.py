@@ -34,6 +34,23 @@ print("Primary Model Loaded Successfully!")
 print(f"\nLoading specialized Tamil Whisper model...")
 try:
     if os.path.isdir(TAMIL_MODEL_PATH):
+        # If config files are missing, copy them from the cached medium model offline
+        preprocessor_path = os.path.join(TAMIL_MODEL_PATH, "preprocessor_config.json")
+        if not os.path.exists(preprocessor_path):
+            try:
+                from huggingface_hub import snapshot_download
+                import shutil
+                medium_dir = snapshot_download("Systran/faster-whisper-medium", local_files_only=True)
+                for filename in ["tokenizer.json", "preprocessor_config.json"]:
+                    dst_file = os.path.join(TAMIL_MODEL_PATH, filename)
+                    if not os.path.exists(dst_file):
+                        src_file = os.path.join(medium_dir, filename)
+                        if os.path.exists(src_file):
+                            shutil.copy(src_file, dst_file)
+                            print(f"Copied missing config {filename} to {TAMIL_MODEL_PATH} offline.")
+            except Exception as copy_err:
+                print(f"Could not copy offline configs to Tamil model path: {copy_err}")
+
         tamil_whisper_model = WhisperModel(
             TAMIL_MODEL_PATH,
             device=DEVICE,

@@ -14,9 +14,9 @@ def check_db_profile_name(profile_id: str) -> str | None:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT speaker_name FROM global_speaker_profiles WHERE id = %s;", (profile_id,))
+        cur.execute("SELECT speaker_name FROM global_speaker_profiles WHERE id = ?;", (profile_id,))
         row = cur.fetchone()
-        return row["speaker_name"] if row else None
+        return row[0] if row else None
     finally:
         release_connection(conn)
 

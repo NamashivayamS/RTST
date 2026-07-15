@@ -131,14 +131,10 @@ class TranslationService:
         else:
             ct2_model_dir = os.path.join(model_path, "indic-en-200m-ct2", "ctranslate2_model")
             
-        # 3. Load the SentencePiece tokenizers from the original AI4Bharat repo
-        original_model_name = "ai4bharat/indictrans2-en-indic-dist-200M" if "en-indic" in model_name else "ai4bharat/indictrans2-indic-en-dist-200M"
-        try:
-            ai4_path = snapshot_download(original_model_name, allow_patterns=["*model.SRC", "*model.TGT"], local_files_only=True)
-        except Exception:
-            ai4_path = snapshot_download(original_model_name, allow_patterns=["*model.SRC", "*model.TGT"])
-        sp_src = spm.SentencePieceProcessor(model_file=os.path.join(ai4_path, "model.SRC"))
-        sp_tgt = spm.SentencePieceProcessor(model_file=os.path.join(ai4_path, "model.TGT"))
+        # 3. Load the SentencePiece tokenizers directly from the vocab folder in the adalat-ai repo
+        vocab_dir = os.path.join(ct2_model_dir, "vocab")
+        sp_src = spm.SentencePieceProcessor(model_file=os.path.join(vocab_dir, "model.SRC"))
+        sp_tgt = spm.SentencePieceProcessor(model_file=os.path.join(vocab_dir, "model.TGT"))
         
         # 4. Load the C++ CTranslate2 Engine with int8 quantization
         compute_type = "int8_float16" if self.device == "cuda" else "int8"

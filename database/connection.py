@@ -1,23 +1,19 @@
 # database/connection.py
 """
-PostgreSQL connection pool for RealTimeSpeechTranslator.
+MS SQL Server connection handling for RealTimeSpeechTranslator (via pyodbc).
 
-Why a pool instead of get_connection() / conn.close()?
-────────────────────────────────────────────────────────
-The old pattern opened a fresh TCP connection to Postgres on every DB call
-and tore it down immediately after. Under concurrent WebSocket sessions
-(multiple speakers, each firing utterances every few seconds) this means:
+Why not a manual pool like the old ThreadedConnectionPool?
+────────────────────────────────────────────────────────────
+pyodbc enables ODBC-level connection pooling by default (pyodbc.pooling = True,
+set once at import time, before the first connection is opened). The ODBC driver
+manager keeps physical connections alive and hands them back out on pyodbc.connect()
+calls with a matching connection string — so calling connect() per borrow here is
+NOT equivalent to psycopg2's old per-call handshake cost.
 
-  • New TCP handshake + TLS negotiation on every INSERT   (~5–15 ms penalty)
-  • PostgreSQL spawns a new backend process per connection (memory pressure)
-  • Postgres default max_connections=100 is exhausted quickly under load
+get_connection()/release_connection(conn) are kept as the public interface so
+queries.py needed no changes to its calling convention, only its SQL syntax.
 
-ThreadedConnectionPool pre-opens `minconn` connections at startup and keeps
-them alive, lending them out and reclaiming them — exactly like a database
-ORM would. The pool is thread-safe, which matters because our DB writes run
-inside loop.run_in_executor() on background threads.
-
-Usage
+Usage (unchanged from the Postgres version)
 ─────
   from database.connection import get_connection, release_connection
 
@@ -27,99 +23,97 @@ Usage
       ...
       conn.commit()
   finally:
-      release_connection(conn)   # returns conn to the pool, does NOT close it
-
-Pool lifecycle
-──────────────
-  Call init_pool() once at FastAPI startup.
-  Call close_pool() once at FastAPI shutdown.
-  Never call conn.close() directly — use release_connection() instead.
+      release_connection(conn)
 """
 
 import logging
-from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
+import time
+import pyodbc
 
 from config import (
-    POSTGRES_HOST,
-    POSTGRES_DB,
-    POSTGRES_USER,
-    POSTGRES_PASSWORD,
+    MSSQL_HOST,
+    MSSQL_PORT,
+    MSSQL_DB,
+    MSSQL_USER,
+    MSSQL_PASSWORD,
+    MSSQL_DRIVER,
+    MSSQL_ENCRYPT,
 )
 
 logger = logging.getLogger("ispeak.db")
 
-# The pool is module-level so it is shared across all threads and all
-# requests for the lifetime of the process.
-_pool: pool.ThreadedConnectionPool | None = None
+# Must be set before the first pyodbc.connect() call.
+pyodbc.pooling = True
+
+_CONN_STR = (
+    f"DRIVER={MSSQL_DRIVER};"
+    f"SERVER={MSSQL_HOST},{MSSQL_PORT};"
+    f"DATABASE={MSSQL_DB};"
+    f"UID={MSSQL_USER};"
+    f"PWD={MSSQL_PASSWORD};"
+    f"Encrypt={MSSQL_ENCRYPT};"
+    f"TrustServerCertificate=yes;"   # internal/self-signed server cert — set to 'no'
+                                      # and supply a real cert if this ever crosses
+                                      # an untrusted network
+)
 
 
-def init_pool(minconn: int = 2, maxconn: int = 20) -> None:
+_initialised = False
+
+
+def init_pool(minconn: int = 2, maxconn: int = 20, retries: int = 10, retry_delay: float = 3.0) -> None:
     """
-    Create the connection pool.
-    Call this ONCE inside FastAPI's startup_event before any DB query runs.
-
-    minconn: connections kept open even when idle. 2 is enough for most demos.
-    maxconn: hard ceiling. Under heavy load, get_connection() will block
-             (up to the timeout set in psycopg2) rather than exceeding this.
-             Set to (expected_concurrent_users * 2) as a starting heuristic.
+    Verifies SQL Server is reachable before the app starts accepting connections.
+    minconn/maxconn are accepted for call-site compatibility with main.py's
+    startup_event but aren't used directly — ODBC's own pool sizing is controlled
+    by the driver manager, not per-process here.
     """
-    global _pool
-
-    if _pool is not None:
+    global _initialised
+    if _initialised:
         logger.warning("[DB Pool] init_pool() called more than once — ignoring.")
         return
 
-    logger.info(
-        f"[DB Pool] Initialising ThreadedConnectionPool "
-        f"(min={minconn}, max={maxconn}) → "
-        f"{POSTGRES_USER}@{POSTGRES_HOST}/{POSTGRES_DB}"
-    )
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            conn = pyodbc.connect(_CONN_STR, timeout=5)
+            conn.close()
+            _initialised = True
+            logger.info(
+                "[DB Pool] Connected to MSSQL at %s:%s/%s (attempt %d).",
+                MSSQL_HOST, MSSQL_PORT, MSSQL_DB, attempt,
+            )
+            return
+        except pyodbc.Error as e:
+            last_err = e
+            logger.warning(
+                "[DB Pool] MSSQL not ready yet (attempt %d/%d): %s",
+                attempt, retries, e,
+            )
+            time.sleep(retry_delay)
 
-    _pool = pool.ThreadedConnectionPool(
-        minconn=minconn,
-        maxconn=maxconn,
-        host=POSTGRES_HOST,
-        database=POSTGRES_DB,
-        user=POSTGRES_USER,
-        password=POSTGRES_PASSWORD,
-        # RealDictCursor makes row['column_name'] work everywhere in queries.py
-        cursor_factory=RealDictCursor,
-    )
-
-    logger.info("[DB Pool] Pool ready.")
+    raise RuntimeError(f"[DB Pool] Could not connect to MSSQL after {retries} attempts: {last_err}")
 
 
 def close_pool() -> None:
-    """
-    Drain and close all connections in the pool.
-    Call this inside FastAPI's shutdown_event.
-    """
-    global _pool
-    if _pool is not None:
-        _pool.closeall()
-        _pool = None
-        logger.info("[DB Pool] All connections closed.")
+    """No persistent pool object to drain — ODBC manages its own connections.
+    Kept for call-site compatibility with main.py's shutdown_event."""
+    global _initialised
+    _initialised = False
+    logger.info("[DB Pool] Shutdown acknowledged (ODBC pool managed by driver manager).")
 
 
 def get_connection():
-    """
-    Borrow a connection from the pool.
-    Always pair with release_connection() in a finally block.
-    Raises RuntimeError if init_pool() was never called.
-    """
-    if _pool is None:
+    """Borrow a (pooled) connection. Always pair with release_connection()."""
+    if not _initialised:
         raise RuntimeError(
-            "[DB Pool] Pool is not initialised. "
-            "Call database.connection.init_pool() in startup_event first."
+            "[DB Pool] Not initialised. Call database.connection.init_pool() in startup_event first."
         )
-    return _pool.getconn()
+    return pyodbc.connect(_CONN_STR, timeout=10)
 
 
 def release_connection(conn) -> None:
-    """
-    Return a borrowed connection to the pool.
-    If conn is None (e.g. get_connection() raised), this is a safe no-op.
-    """
-    if _pool is not None and conn is not None:
-        _pool.putconn(conn)
+    """Return a connection. With ODBC pooling enabled, .close() returns the
+    physical connection to the pool rather than tearing down the TCP session."""
+    if conn is not None:
+        conn.close()
