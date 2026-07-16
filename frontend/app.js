@@ -179,10 +179,13 @@ function connectWebSocket() {
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.host || 'localhost:8000';
+    // Derive the base path from the current page URL so the app works
+    // when served under a subpath (e.g. /rtst) as well as at the root (/).
+    const basePath = location.pathname.replace(/\/+$/, '');  // e.g. "" or "/rtst"
     // Token is injected into the HTML by the server at serve-time.
     // It rotates on every server restart and never appears in source code.
     const TOKEN = window.__WS_TOKEN__ || "";
-    let wsUrl = `${protocol}//${host}/ws/translate?token=${TOKEN}`;
+    let wsUrl = `${protocol}//${host}${basePath}/ws/translate?token=${TOKEN}`;
     if (currentMeetingId) {
         wsUrl += `&meeting_id=${currentMeetingId}`;
     }
@@ -815,7 +818,7 @@ async function executeSummarization() {
     generateSummaryTabBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> Summarizing...';
 
     try {
-        const response = await fetch(`/api/meetings/${currentMeetingId}/summarize`, { method: 'POST' });
+        const response = await fetch(`./api/meetings/${currentMeetingId}/summarize`, { method: 'POST' });
         const data = await response.json();
 
         if (data.error) {
@@ -912,7 +915,7 @@ async function executeGenerateMinutes() {
     generateMinutesTabBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-purple"></i> Generating MoM...';
 
     try {
-        const response = await fetch(`/api/meetings/${currentMeetingId}/minutes`, { method: 'POST' });
+        const response = await fetch(`./api/meetings/${currentMeetingId}/minutes`, { method: 'POST' });
         const data = await response.json();
 
         if (data.error) {
