@@ -42,11 +42,9 @@ services:
 
   app:
     image: realtime-speech-translator:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: ispeak_app
     restart: unless-stopped
+    #gpus: all
     depends_on:
       db:
         condition: service_healthy
@@ -57,7 +55,7 @@ services:
     environment:
       MSSQL_HOST: db
     ports:
-      - "8010:8000"
+      - "127.0.0.1:8010:8000"
     volumes:
       - ./logs:/app/logs
       - ./temp_audio:/app/temp_audio
