@@ -19,6 +19,9 @@ research/
 │   │   ├── environment.py      # Hardware (GPU, CUDA, PyTorch) checking utilities
 │   │   ├── installer.py        # Kaggle-specific dependency management
 │   │   ├── git_sync.py         # Automated Git synchronization
+│   │   ├── project_validator.py# Verifies workspace directory structure integrity
+│   │   ├── cache_manager.py    # Configures HF, PyTorch, and Transformers cache locations
+│   │   ├── model_manager.py    # Downloads and verifies the ASR, MT, Speaker, TTS models
 │   │   └── logger.py           # Experiment logging and telemetry
 │   │
 │   └── configs/                # Configuration and environment variables
