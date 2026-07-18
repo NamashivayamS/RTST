@@ -19,12 +19,13 @@ Changes from demo version → production version:
 from dotenv import load_dotenv
 load_dotenv()
 
-# ── Force fully-offline mode for HuggingFace / Transformers ────────────────────
+# ── Force fully-offline mode for HuggingFace / Transformers unless overridden ──
 # All models are already cached locally. This prevents the 30s retry delay
 # when the machine has no internet, and ensures zero external network calls.
 import os
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+if os.getenv("HF_OFFLINE", "1") == "1":
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 import torch
 torch.set_num_threads(1)  # Prevent CPU thread thrashing across concurrent pipeline stages
