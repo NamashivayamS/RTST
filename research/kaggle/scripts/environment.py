@@ -13,6 +13,11 @@ import platform
 import sys
 from dataclasses import dataclass
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 
 # ==========================================================
 # Data Classes
@@ -20,8 +25,6 @@ from dataclasses import dataclass
 
 @dataclass
 class PythonInfo:
-    """Information about the current Python runtime."""
-
     version: str
     executable: str
     implementation: str
@@ -29,8 +32,6 @@ class PythonInfo:
 
 @dataclass
 class OSInfo:
-    """Information about the operating system."""
-
     system: str
     release: str
     version: str
@@ -38,20 +39,22 @@ class OSInfo:
     processor: str
 
 
+@dataclass
+class TorchInfo:
+    installed: bool
+    version: str
+    cuda_available: bool
+    cuda_version: str
+    cudnn_enabled: bool
+
+
 # ==========================================================
 # Environment Inspector
 # ==========================================================
 
 class EnvironmentInspector:
-    """
-    Collects information about the execution environment.
-
-    This class ONLY inspects the environment.
-    It never changes anything on the system.
-    """
 
     def get_python_info(self) -> PythonInfo:
-        """Return Python runtime information."""
 
         return PythonInfo(
             version=sys.version.split()[0],
@@ -60,7 +63,6 @@ class EnvironmentInspector:
         )
 
     def get_os_info(self) -> OSInfo:
-        """Return operating system information."""
 
         return OSInfo(
             system=platform.system(),
@@ -70,18 +72,39 @@ class EnvironmentInspector:
             processor=platform.processor(),
         )
 
+    def get_torch_info(self) -> TorchInfo:
+
+        if torch is None:
+            return TorchInfo(
+                installed=False,
+                version="Not Installed",
+                cuda_available=False,
+                cuda_version="N/A",
+                cudnn_enabled=False,
+            )
+
+        return TorchInfo(
+            installed=True,
+            version=torch.__version__,
+            cuda_available=torch.cuda.is_available(),
+            cuda_version=torch.version.cuda or "CPU Only",
+            cudnn_enabled=torch.backends.cudnn.is_available(),
+        )
+
 
 # ==========================================================
 # Main (Testing)
 # ==========================================================
 
-def main() -> None:
+def main():
+
     inspector = EnvironmentInspector()
 
     python_info = inspector.get_python_info()
     os_info = inspector.get_os_info()
+    torch_info = inspector.get_torch_info()
 
-    print("\n================ Environment Report ================\n")
+    print("\n================ RTST Environment Report ================\n")
 
     print("Python")
     print("--------------------------------------------")
@@ -97,7 +120,15 @@ def main() -> None:
     print(f"Machine         : {os_info.machine}")
     print(f"Processor       : {os_info.processor}")
 
-    print("\n====================================================")
+    print("\nPyTorch")
+    print("--------------------------------------------")
+    print(f"Installed       : {torch_info.installed}")
+    print(f"Version         : {torch_info.version}")
+    print(f"CUDA Available  : {torch_info.cuda_available}")
+    print(f"CUDA Version    : {torch_info.cuda_version}")
+    print(f"cuDNN Enabled   : {torch_info.cudnn_enabled}")
+
+    print("\n=========================================================")
 
 
 if __name__ == "__main__":
