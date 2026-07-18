@@ -21,14 +21,14 @@ research/
 │   │   ├── git_sync.py         # Automated Git synchronization
 │   │   └── logger.py           # Experiment logging and telemetry
 │   │
-│   ├── configs/                # Configuration and environment variables
-│   │   ├── requirements_kaggle.txt
-│   │   └── kaggle.env
-│   │
-│   ├── cache/                  # Cached assets (models, weights, intermediate data)
-│   ├── outputs/                # Temporary output files (audio files, visualizations)
-│   ├── experiments/            # JSON/CSV outputs tracking metric logs, WER, latency
-│   └── logs/                   # System and runtime logs
+│   └── configs/                # Configuration and environment variables
+│       ├── requirements_kaggle.txt
+│       └── kaggle.env
+│
+├── cache/                      # Cached assets (models, weights, intermediate data)
+├── experiments/                # JSON/CSV outputs tracking metric logs, WER, latency
+├── outputs/                    # Temporary output files (audio files, visualizations)
+└── logs/                       # System and runtime logs
 ```
 
 ## Core Principles
