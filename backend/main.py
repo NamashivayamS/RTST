@@ -164,7 +164,10 @@ async def startup_event():
     )
 
     # Fix 1: initialise DB connection pool
-    init_pool(minconn=2, maxconn=20)
+    if os.getenv("MOCK_DATABASE", "0") != "1":
+        init_pool(minconn=2, maxconn=20)
+    else:
+        logger.info("[Startup] MOCK_DATABASE enabled. Skipping MSSQL initialization.")
 
     # Fix 3: load encryption key once
     try:
@@ -212,7 +215,8 @@ async def startup_event():
 async def shutdown_event():
     if router:
         router.shutdown()
-    close_pool()            # Fix 1: drain pool cleanly
+    if os.getenv("MOCK_DATABASE", "0") != "1":
+        close_pool()            # Fix 1: drain pool cleanly
     stop_report_writer()    # Fix 6: flush pending reports before exit
     logger.info("[Shutdown] Clean shutdown complete.")
 

@@ -27,6 +27,7 @@ Usage (unchanged from the Postgres version)
 """
 
 import logging
+import os
 import time
 import pyodbc
 
@@ -71,6 +72,11 @@ def init_pool(minconn: int = 2, maxconn: int = 20, retries: int = 10, retry_dela
     global _initialised
     if _initialised:
         logger.warning("[DB Pool] init_pool() called more than once — ignoring.")
+        return
+
+    if os.getenv("MOCK_DATABASE", "0") == "1":
+        logger.info("[DB Pool] Mock database enabled. Skipping MSSQL connection.")
+        _initialised = True
         return
 
     last_err = None

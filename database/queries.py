@@ -13,11 +13,17 @@ rather than returning it. Always call release_connection(conn).
 """
 
 import logging
+import os
 import numpy as np
 from database.connection import get_connection, release_connection
 from config import DEFAULT_DEPARTMENT_ID
 
 logger = logging.getLogger("ispeak.db")
+
+MOCK_DATABASE = os.getenv("MOCK_DATABASE", "0") == "1"
+
+if MOCK_DATABASE:
+    import database.mock_queries as mock_queries
 
 
 def _row_to_dict(cursor, row) -> dict | None:
@@ -42,6 +48,9 @@ def create_meeting(
     Inserts a new meeting row and returns its UUID.
     Called once per WebSocket connection, at connect time.
     """
+    if MOCK_DATABASE:
+        return mock_queries.create_meeting(title, department_id)
+
     conn = None
     try:
         conn = get_connection()
@@ -83,6 +92,13 @@ def save_utterance(
     Inserts one utterance row and returns its UUID.
     Called from a background thread for every successfully translated sentence.
     """
+    if MOCK_DATABASE:
+        return mock_queries.save_utterance(
+            meeting_id, source_text, translated_text,
+            source_language, target_language, total_latency_ms,
+            speaker_label, speaker_id,
+        )
+
     conn = None
     try:
         conn = get_connection()
@@ -137,6 +153,9 @@ def rename_speaker_label(
     Called from a background thread when the user corrects a speaker name.
     Returns the number of rows updated.
     """
+    if MOCK_DATABASE:
+        return mock_queries.rename_speaker_label(meeting_id, speaker_id, new_label)
+
     conn = None
     try:
         conn = get_connection()
@@ -179,6 +198,9 @@ def merge_speaker_utterances(
     Called from a background thread when merging speaker profiles.
     Returns the number of rows updated.
     """
+    if MOCK_DATABASE:
+        return mock_queries.merge_speaker_utterances(meeting_id, source_id, target_id, target_name)
+
     conn = None
     try:
         conn = get_connection()
@@ -222,6 +244,9 @@ def load_global_speaker_profiles(model_version: str, embedding_dim: int) -> dict
             "primary_index": int   # index into "templates" where is_primary=True
         }}
     """
+    if MOCK_DATABASE:
+        return mock_queries.load_global_speaker_profiles(model_version, embedding_dim)
+
     conn = None
     profiles = {}
     try:
@@ -292,6 +317,11 @@ def create_global_speaker_profile(
 
     Returns the new profile_id as a string either way.
     """
+    if MOCK_DATABASE:
+        return mock_queries.create_global_speaker_profile(
+            speaker_name, primary_embedding, model_version, embedding_dim, profile_id,
+        )
+
     conn = None
     try:
         conn = get_connection()
@@ -358,6 +388,9 @@ def add_speaker_template(
     Also inserts an 'added' row into speaker_template_events with the similarity score.
     Returns the new template row's id.
     """
+    if MOCK_DATABASE:
+        return mock_queries.add_speaker_template(profile_id, embedding, similarity)
+
     conn = None
     try:
         conn = get_connection()
@@ -410,6 +443,9 @@ def evict_speaker_template(
     Also inserts an 'evicted' row into speaker_template_events.
     Must never be called with a template_id where is_primary=True — asserts this.
     """
+    if MOCK_DATABASE:
+        return mock_queries.evict_speaker_template(template_id, speaker_id, similarity)
+
     conn = None
     try:
         conn = get_connection()
@@ -460,6 +496,9 @@ def update_global_speaker_name(profile_id: str, new_name: str) -> None:
     """
     Updates only the name label of a global speaker profile.
     """
+    if MOCK_DATABASE:
+        return mock_queries.update_global_speaker_name(profile_id, new_name)
+
     conn = None
     try:
         conn = get_connection()
@@ -488,6 +527,9 @@ def delete_global_speaker_profile(profile_id: str) -> None:
     Deletes a global speaker profile.
     CASCADE will remove all associated templates automatically.
     """
+    if MOCK_DATABASE:
+        return mock_queries.delete_global_speaker_profile(profile_id)
+
     conn = None
     try:
         conn = get_connection()
@@ -508,6 +550,9 @@ def get_meeting_details(meeting_id: str) -> dict | None:
     """
     Fetches the title and creation time of a meeting.
     """
+    if MOCK_DATABASE:
+        return mock_queries.get_meeting_details(meeting_id)
+
     conn = None
     try:
         conn = get_connection()
@@ -542,6 +587,9 @@ def get_meeting_transcript(meeting_id: str) -> list[dict]:
         list of dicts with keys: speaker_label, source_text, translated_text,
         source_language, target_language, utterance_time
     """
+    if MOCK_DATABASE:
+        return mock_queries.get_meeting_transcript(meeting_id)
+
     conn = None
     try:
         conn = get_connection()
