@@ -29,7 +29,6 @@ Usage (unchanged from the Postgres version)
 import logging
 import os
 import time
-import pyodbc
 
 from config import (
     MSSQL_HOST,
@@ -43,8 +42,12 @@ from config import (
 
 logger = logging.getLogger("ispeak.db")
 
-# Must be set before the first pyodbc.connect() call.
-pyodbc.pooling = True
+MOCK_DATABASE = os.getenv("MOCK_DATABASE", "0") == "1"
+
+if not MOCK_DATABASE:
+    import pyodbc
+    # Must be set before the first pyodbc.connect() call.
+    pyodbc.pooling = True
 
 _CONN_STR = (
     f"DRIVER={MSSQL_DRIVER};"
@@ -90,7 +93,7 @@ def init_pool(minconn: int = 2, maxconn: int = 20, retries: int = 10, retry_dela
                 MSSQL_HOST, MSSQL_PORT, MSSQL_DB, attempt,
             )
             return
-        except pyodbc.Error as e:
+        except Exception as e:
             last_err = e
             logger.warning(
                 "[DB Pool] MSSQL not ready yet (attempt %d/%d): %s",
