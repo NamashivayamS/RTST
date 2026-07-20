@@ -46,7 +46,7 @@ charset-normalizer==3.4.7
 idna==3.16
 
 # Voice Activity Detection (VAD)
-silero-vad==6.2.1
+silero-vad==6.1.0
 onnxruntime==1.23.2
 
 # Speech-to-Text (STT) - Faster-Whisper
