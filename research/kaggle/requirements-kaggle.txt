@@ -5,8 +5,17 @@
 # on Kaggle for development/testing (FastAPI, VAD, STT, Translation, Punctuation, 
 # Speaker Identification, Mock Database).
 #
-# Excludes heavy and unnecessary packages like Coqui TTS, IndicF5, model training,
-# evaluation, Jupyter/notebook extras, development tools, and database drivers.
+# CRITICAL NOTE ON PYTORCH & CUDA RUNTIMES:
+# Do NOT list 'torch' or 'torchaudio' in this file. To prevent pip from installing
+# torch 2.6.0 from PyPI (which pulls in incompatible CUDA 12.6/13.0 runtimes and
+# causes libcudart.so errors), you MUST ensure the environment uses Kaggle's 
+# pre-installed PyTorch.
+#
+# If installing inside a virtual environment (venv) on Kaggle, initialize it with:
+#     python -m venv env --system-site-packages
+#
+# This allows pip to see the pre-installed torch/torchaudio/CUDA versions and satisfy
+# speechbrain's dependencies without downloading heavy PyPI wheels.
 # ==============================================================================
 
 # FastAPI & ASGI Web Server
