@@ -93,7 +93,7 @@ typer==0.25.1
 python-dotenv==1.2.2
 PyNaCl==1.6.2
 scipy==1.11.4
-numpy==1.22.0
+numpy==1.26.4
 psutil==7.2.2
 platformdirs==4.9.6
 typing_extensions==4.15.0
@@ -105,5 +105,4 @@ dill==0.4.1
 multiprocess==0.70.19
 decorator==5.3.1
 frozendict==2.4.7
-pycparser==3.0
-cffi==2.0.0
+
