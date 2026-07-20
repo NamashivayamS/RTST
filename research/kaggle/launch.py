@@ -24,7 +24,7 @@ shutdown_initiated = False
 uvicorn_proc = None
 cloudflared_proc = None
 
-def wait_for_port(host="127.0.0.1", port=8000, timeout=60):
+def wait_for_port(host="127.0.0.1", port=8000, timeout=300):
     """
     Attempts to connect to the uvicorn port to ensure the backend is fully
     loaded and ready to receive traffic before starting the tunnel.
@@ -36,7 +36,7 @@ def wait_for_port(host="127.0.0.1", port=8000, timeout=60):
             with socket.create_connection((host, port), timeout=1):
                 print("[*] Backend is open and accepting connections.", flush=True)
                 return True
-        except (socket.timeout, ConnectionRefusedError):
+        except (socket.timeout, ConnectionRefusedError, OSError):
             if time.time() - start_time > timeout:
                 print("[!] Timed out waiting for backend to start.", flush=True)
                 return False
@@ -203,7 +203,7 @@ def main():
     t_uvicorn.start()
 
     # 3. Wait for backend port to open
-    if not wait_for_port(host="127.0.0.1", port=8000, timeout=45):
+    if not wait_for_port(host="127.0.0.1", port=8000, timeout=300):
         print("[!] Backend failed to start. Terminating.", flush=True)
         if uvicorn_proc.poll() is None:
             uvicorn_proc.kill()
