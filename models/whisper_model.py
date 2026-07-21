@@ -10,7 +10,7 @@ COMPUTE_TYPE = "int8_float16" if DEVICE == "cuda" else "int8"
 
 PRIMARY_MODEL = "large-v3-turbo"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TAMIL_MODEL_PATH = os.path.join(PROJECT_ROOT, "whisper-tamil-medium-ct2")
+TAMIL_MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "whisper-tamil-medium-ct2")
 
 print(f"\nLoading Primary Whisper Model ({PRIMARY_MODEL} on {DEVICE})...")
 
