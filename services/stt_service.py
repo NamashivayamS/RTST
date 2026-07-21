@@ -132,6 +132,13 @@ class STTService:
         retry_fired = False
         stage_timings = {"primary_pass_ms": 0, "tamil_reroute_ms": 0, "retry_pass_ms": 0}
 
+        # Determine target language code for Whisper.
+        # If force_language is explicitly provided (from UI selection), use it.
+        # Otherwise, fall back to language parameter, which defaults to None (auto-detection).
+        lang_arg = force_language if force_language else language
+        if lang_arg == "":
+            lang_arg = None
+
         # ── Tamil-First Bypass (Priority 2) ──
         if force_language == "ta" and self.tamil_model is not None:
             print("[STT] Tamil-First Mode active: Bypassing primary model directly to Tamil model.")
@@ -151,7 +158,7 @@ class STTService:
             segments_gen, info = self.model.transcribe(
                 audio_input,
                 beam_size=self.beam_size,
-                language=language,
+                language=lang_arg,
                 initial_prompt=initial_prompt,
                 vad_filter=False,            # Already validated by streaming VAD
                 condition_on_previous_text=False,
@@ -199,7 +206,7 @@ class STTService:
             retry_fired = True
             
             retry_model = self.tamil_model if (detected_lang == "ta" and self.tamil_model is not None) else self.model
-            retry_lang_arg = "ta" if retry_model == self.tamil_model else language
+            retry_lang_arg = "ta" if retry_model == self.tamil_model else lang_arg
             
             retry_gen, retry_info = retry_model.transcribe(
                 audio_input,
