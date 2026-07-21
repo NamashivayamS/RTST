@@ -173,25 +173,38 @@ def main():
 
     print("[*] Starting RTST Kaggle Launcher...", flush=True)
 
-    # ── Automatically symlink the mounted Kaggle dataset if present ──
-    # Note: We support linking to BOTH root/whisper-tamil-medium-ct2 and models/whisper-tamil-medium-ct2 
-    # to ensure compatibility whichever path is active in whisper_model.py.
-    kaggle_input_dir = "/kaggle/input/whisper-tamil-medium-ct2"
-    if os.path.exists(kaggle_input_dir):
-        # We will symlink to both potential target paths so that whichever configuration is used, it works.
-        target_paths = [
-            os.path.join(root_dir, "whisper-tamil-medium-ct2"),
-            os.path.join(root_dir, "models", "whisper-tamil-medium-ct2")
-        ]
-        for target_link_dir in target_paths:
-            if not os.path.exists(target_link_dir) and not os.path.islink(target_link_dir):
-                print(f"[*] Kaggle dataset detected. Creating symbolic link to {target_link_dir}...", flush=True)
-                try:
-                    os.makedirs(os.path.dirname(target_link_dir), exist_ok=True)
-                    os.symlink(kaggle_input_dir, target_link_dir)
-                    print(f"[*] Symbolic link created successfully at {target_link_dir}.", flush=True)
-                except Exception as sym_err:
-                    print(f"[!] Failed to create symbolic link to {target_link_dir}: {sym_err}", flush=True)
+    # ── Automatically find and symlink the mounted Kaggle dataset ──
+    # Search /kaggle/input/ recursively for a folder containing 'model.bin' and 'config.json'
+    # to locate the converted Tamil model files regardless of dataset naming or nesting.
+    kaggle_input_root = "/kaggle/input"
+    detected_model_dir = None
+    if os.path.exists(kaggle_input_root):
+        print("[*] Scanning /kaggle/input for CTranslate2 Tamil model...", flush=True)
+        for root, dirs, files in os.walk(kaggle_input_root):
+            if "model.bin" in files and "config.json" in files:
+                # Distinguish from potential other model folders by verifying vocabulary/tokenizer files exist
+                if "vocabulary.json" in files or "tokenizer.json" in files:
+                    detected_model_dir = root
+                    print(f"[*] Found model directory at: {detected_model_dir}", flush=True)
+                    break
+        
+        if detected_model_dir:
+            # We will symlink to both potential target paths so that whichever configuration is used, it works.
+            target_paths = [
+                os.path.join(root_dir, "whisper-tamil-medium-ct2"),
+                os.path.join(root_dir, "models", "whisper-tamil-medium-ct2")
+            ]
+            for target_link_dir in target_paths:
+                if not os.path.exists(target_link_dir) and not os.path.islink(target_link_dir):
+                    print(f"[*] Creating symbolic link to {target_link_dir}...", flush=True)
+                    try:
+                        os.makedirs(os.path.dirname(target_link_dir), exist_ok=True)
+                        os.symlink(detected_model_dir, target_link_dir)
+                        print(f"[*] Symbolic link created successfully at {target_link_dir}.", flush=True)
+                    except Exception as sym_err:
+                        print(f"[!] Failed to create symbolic link to {target_link_dir}: {sym_err}", flush=True)
+        else:
+            print("[!] Warn: No CTranslate2 model folder (containing model.bin) found in /kaggle/input.", flush=True)
 
     # 1. Set up cloudflared binary
     cloudflared_bin = setup_cloudflared()
