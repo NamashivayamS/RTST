@@ -1117,10 +1117,10 @@ async def _run_pipeline(
             state.detected_language_lock = src_lang
             pl_logger.info("[Pipeline] Language lock set: %s", state.detected_language_lock)
 
-        # ── Update STT context (last ~5 words for Whisper prompt) ──────────────
-        words = result.get("raw_text", "").split()
+        text_for_context = result.get("cleaned_text", "").strip() or result.get("raw_text", "").strip()
+        words = text_for_context.split()
         if words:
-            state.stt_context = state._stt_domain_seed + " " + " ".join(words[-5:])
+            state.stt_context = state._stt_domain_seed + " " + " ".join(words[-20:])
 
         # ── Step 2: Sliding-window two-pass translation ────────────────────────
         #
