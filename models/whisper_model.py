@@ -8,7 +8,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # RTX 3050 supports FP16, so this is safe. Falls back to int8 on CPU.
 COMPUTE_TYPE = "int8_float16" if DEVICE == "cuda" else "int8"
 
-PRIMARY_MODEL = "medium"
+PRIMARY_MODEL = "large-v3-turbo"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TAMIL_MODEL_PATH = os.path.join(PROJECT_ROOT, "whisper-tamil-medium-ct2")
 

@@ -20,9 +20,9 @@ VAD_THRESHOLD        = 0.60   # Silero VAD sensitivity (0=sensitive, 1=strict)
 TURN_TAKING_SILENCE_SEC = 2.0
 
 # ── Speaker Identification ────────────────────────────────────────────────────
-SPEAKER_ID_LOCAL_THRESHOLD     = 0.50  # Match threshold in current meeting session
+SPEAKER_ID_LOCAL_THRESHOLD     = 0.40  # Match threshold in current meeting session (lowered from 0.50 — logs showed valid matches at 0.43-0.48 being missed)
 SPEAKER_ID_GLOBAL_THRESHOLD    = 0.70  # Strict threshold for global profile database
-SPEAKER_ID_INTRO_THRESHOLD     = 0.52  # Lenient threshold used only during self-introduction name matching
+SPEAKER_ID_INTRO_THRESHOLD     = 0.45  # Lenient threshold used only during self-introduction name matching
 SPEAKER_ID_MIN_ENROLL_DURATION = 3.0   # Min audio duration (sec) to auto-enroll a new speaker
 SPEAKER_ID_DEVICE              = os.environ.get("SPEAKER_ID_DEVICE", "auto")  # "auto" | "cpu" | "cuda"
 SPEAKER_ID_MAX_TEMPLATES       = 5     # primary + up to 4 secondary voice templates per speaker
@@ -51,7 +51,7 @@ ENVIRONMENT_PRESETS = {
         "silence_sec":         0.7,
         "min_speech_sec":      0.50,
         "no_speech_threshold": 0.95,
-        "rms_gate":            0.005,
+        "rms_gate":            0.002,
     },
     "conference": {
         "vad_threshold":       0.70,

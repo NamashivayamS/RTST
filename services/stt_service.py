@@ -25,7 +25,8 @@ TAMIL_SCRIPT_INDICATORS = {"ml", "kn", "te", "hi"}  # these use different script
 
 # ── Confidence-based retry thresholds ─────────────────────────────────────────
 RETRY_AVG_LOGPROB_THRESHOLD  = -1.5   # below this = poor transcription quality (tightened for latency)
-RETRY_COMPRESSION_RATIO_MAX  = 3.2    # above this = hallucination, reject not retry
+RETRY_COMPRESSION_RATIO_MAX  = 3.2    # above this = hallucination, reject not retry (English)
+RETRY_COMPRESSION_RATIO_MAX_INDIC = 5.0  # Tamil/Indic scripts have naturally higher compression ratios
 RETRY_NO_SPEECH_THRESHOLD    = 0.80   # above this = bad audio, worth retrying
 RETRY_BEAM_SIZE              = 3      # beam size for retry pass (reduced for latency)
 
@@ -37,9 +38,6 @@ HALLUCINATION_PATTERNS = [
     r"^\s*[\u0B80-\u0BFF]{1,3}\s*$",  # 1-3 Tamil chars only (hallucinated syllable)
     r"^\s*[a-zA-Z]{1,4}\s*$",         # 1-4 Latin chars only
     r"^\s*\.+\s*$",                
-    r"(?i).*namashivayam.*ramraj.*tirupur.*", 
-    r"(?i).*avinashi.*business.*culture.*brand.*", 
-    r"(?i).*ramraj.*cotton.*tirupur.*veshti.*",   
     r"(?i).*hello.*how are you.*",
     r"(?i).*வணக்கம்.*எப்படி இருக்கிறீர்கள்.*",
 ]
@@ -185,7 +183,7 @@ class STTService:
                 stage_timings["tamil_reroute_ms"] = int((time.perf_counter() - _reroute_start) * 1000)
 
         # ── Quality assessment ─────────────────────────────────────────────────
-        quality = self._assess_segment_quality(segments)
+        quality = self._assess_segment_quality(segments, detected_lang=detected_lang)
 
         if quality["action"] == "reject":
             # Hallucination detected — treat as silence, don't retry
@@ -220,7 +218,7 @@ class STTService:
                 no_repeat_ngram_size=3,
             )
             retry_segments = list(retry_gen)
-            retry_quality  = self._assess_segment_quality(retry_segments)
+            retry_quality  = self._assess_segment_quality(retry_segments, detected_lang=detected_lang)
             stage_timings["retry_pass_ms"] = int((time.perf_counter() - _retry_start) * 1000)
 
             if retry_quality["action"] == "reject":
@@ -403,7 +401,7 @@ class STTService:
         )
         return latin_words / len(words)
 
-    def _assess_segment_quality(self, segments: list) -> dict:
+    def _assess_segment_quality(self, segments: list, detected_lang: str = "en") -> dict:
         """
         Analyses Whisper segment quality metrics and returns one of three actions:
           'accept'  — quality is good, continue normally
@@ -414,6 +412,9 @@ class STTService:
           avg_logprob:       log probability of output tokens (lower = less confident)
           compression_ratio: output/input length ratio (higher = repetition/hallucination)
           no_speech_prob:    Whisper's own silence estimate per segment
+
+        Note: Tamil/Indic scripts produce naturally higher compression ratios
+        in Whisper's tokenizer, so we use a relaxed threshold for non-English.
         """
         if not segments:
             return {
@@ -434,11 +435,16 @@ class STTService:
         ) / len(segments)
 
         # High compression = repetition/hallucination.
-        # Retrying will produce the same garbage — reject outright.
-        if max_compression > RETRY_COMPRESSION_RATIO_MAX:
+        # Use a higher threshold for Indic scripts (Tamil, Hindi, etc.) because
+        # their complex scripts naturally produce higher compression ratios.
+        compression_limit = (
+            RETRY_COMPRESSION_RATIO_MAX if detected_lang == "en"
+            else RETRY_COMPRESSION_RATIO_MAX_INDIC
+        )
+        if max_compression > compression_limit:
             print(
                 f"[STT] Quality: REJECT "
-                f"(compression={max_compression:.2f} > {RETRY_COMPRESSION_RATIO_MAX})"
+                f"(compression={max_compression:.2f} > {compression_limit}, lang={detected_lang})"
             )
             return {
                 "action": "reject",

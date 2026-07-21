@@ -393,9 +393,13 @@ class RouterService:
             # Short fragments (≤3 words) produce garbage translations.
             # Skip them rather than wasting GPU time on nonsense output.
             word_count = len(punctuated_text.split())
-            if word_count < 4:
+            # Tamil/Indic languages are agglutinative — a single word can
+            # encode a full English clause, so the fragment threshold must
+            # be lower for non-English sources.
+            min_words = 2 if src_lang != "en" else 4
+            if word_count < min_words:
                 print(
-                    f"[Pipeline] Fragment gate: {word_count} words — "
+                    f"[Pipeline] Fragment gate: {word_count} words (min={min_words}, lang={src_lang}) — "
                     f"skipping translation: '{punctuated_text}'"
                 )
                 return {

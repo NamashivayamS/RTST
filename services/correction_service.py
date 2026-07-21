@@ -154,6 +154,10 @@ class CorrectionService:
         if len(words) < 4:
             return text
 
+        # ── Question guard — never inject pronouns into questions ─────────
+        if text.rstrip().endswith('?'):
+            return text
+
         fw_raw        = words[0]
         fw            = re.sub(r"[^a-z]", "", fw_raw.lower())
 

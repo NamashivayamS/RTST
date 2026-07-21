@@ -571,13 +571,8 @@ class ConnectionState:
         self.source_lang       = ""
         self.detected_language_lock = ""
         self.language_divergence_count = 0
-        self._stt_domain_seed = (
-            "இராம்ராஜ் காட்டன் திருப்பூர் வேட்டி சட்டை நெசவு தொழில் ஏற்றுமதி "
-            "நாகராஜன் கொங்கு தமிழ் அவிநாசி கலாச்சாரம் பிசினஸ் "
-            "Ramraj Cotton Tirupur veshti shirt weaving export quality "
-            "Nagarajan Kongu Tamil Avinashi business culture brand"
-        )
-        self.stt_context       = self._stt_domain_seed
+        self._stt_domain_seed = ""
+        self.stt_context       = ""
         self.meeting_id        = None   # set at connect time, not lazily
         self.cancel_event      = threading.Event()
         self.turn_taking_fired = False
@@ -594,7 +589,7 @@ class ConnectionState:
         self.min_speech_samples    = int(VAD_MIN_SPEECH_SEC * CFG_SAMPLE_RATE)
         self.max_speech_samples    = int(VAD_MAX_SPEECH_SEC * CFG_SAMPLE_RATE)
         self.no_speech_threshold   = STT_NO_SPEECH_THRESHOLD
-        self.rms_gate              = 0.005
+        self.rms_gate              = 0.002
 
         self._vad_model = load_silero_vad()
         self._vad_model.reset_states()
