@@ -5,6 +5,7 @@ TANGLISH_CORRECTIONS = {
     "கிராமராஜ் காட்டணன்": "Ramraj Cotton",
     "வேட்டினிருவனத்தில்": "Dhoti Company",
     "தந்தி டிவியின்": "Thanthi TV",
+    "சையின் செய்சிச்சின்": "Science Fiction",
     "ராமராஜ்": "Ramraj",
     "காட்டணன்": "Cotton",
     "வேட்டி": "Dhoti",

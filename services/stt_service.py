@@ -150,6 +150,7 @@ class STTService:
                 vad_filter=False,            # Already validated by streaming VAD
                 condition_on_previous_text=False,
                 temperature=0.0,
+                repetition_penalty=1.2,
             )
             segments = list(segments_gen)
             detected_lang = "ta"
@@ -163,6 +164,7 @@ class STTService:
                 vad_filter=False,            # Already validated by streaming VAD
                 condition_on_previous_text=False,
                 temperature=0.0,
+                repetition_penalty=1.2,
             )
 
             segments = list(segments_gen)
@@ -183,6 +185,7 @@ class STTService:
                     vad_filter=False,            # Already validated by streaming VAD
                     condition_on_previous_text=False,
                     temperature=0.0,
+                    repetition_penalty=1.2,
                 )
                 segments = list(segments_gen_ta)
                 info = info_ta
@@ -193,9 +196,15 @@ class STTService:
         quality = self._assess_segment_quality(segments, detected_lang=detected_lang)
 
         if quality["action"] == "reject":
-            # Hallucination detected — treat as silence, don't retry
-            print(f"[STT] Rejected: {quality['reason']}")
-            return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
+            # If the first pass has a high compression ratio (hallucination loop),
+            # try to recover it with the retry pass (which uses temperature & repetition penalty)
+            # instead of rejecting/discarding outright (preventing utterance loss).
+            if "hallucination" in quality.get("reason", ""):
+                print(f"[STT] First-pass hallucination (compression={quality['max_compression']:.2f}) — attempting recovery via retry pass...")
+                quality["action"] = "retry"
+            else:
+                print(f"[STT] Rejected: {quality['reason']}")
+                return self._empty("", info, silence=True, tamil_rerouted=tamil_rerouted, retry_fired=retry_fired, stage_timings=stage_timings)
 
         if quality["action"] == "retry":
             print(
