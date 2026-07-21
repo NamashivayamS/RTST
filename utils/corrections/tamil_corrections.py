@@ -1,4 +1,36 @@
 TAMIL_CORRECTIONS = {
+    # --- Whisper-specific Tamil transcription errors ---
+    # These are systematic errors where Whisper consistently misspells
+    # common Tamil words. Identified from production logs.
+    "வரணங்கள்": "வருடங்கள்",          # years
+    "வரணங்களை": "வருடங்களை",          # years (accusative)
+    "வரணங்களுக்கு": "வருடங்களுக்கு",  # years (dative)
+    "தெரைப்படம்": "திரைப்படம்",       # film
+    "தெரைப்படத்தால்": "திரைப்படத்தால்", # by film
+    "தெரைப்படத்தை": "திரைப்படத்தை",   # film (accusative)
+    "ஏக்குணர்": "இயக்குநர்",           # director
+    "ஏக்குணரு": "இயக்குநர்",           # director (colloquial)
+    "பெருக்கிறேன்": "பேசுகிறேன்",      # speaking
+    "பெருக்கிறார்": "பேசுகிறார்",      # speaking (honorific)
+    "நரையை": "நிறைய",                  # many/lot
+    "நரைய": "நிறைய",                   # many/lot (variant)
+    "கலியிஸ்": "ரிலீஸ்",              # release
+    "கலர்க்கும்": "கலர்",             # color (variant)
+    "களர்க்கொண்டு": "கலர்கொண்ட",     # colored
+    "விடியவிடார்": "வீடியோவை",        # video (accusative)
+    "விடியோல்": "வீடியோவில்",         # in video
+    "லபரிட்ட": "elaborate",            # elaborate (English loanword)
+    "படத்தபத்தை": "படத்தைப் பற்றி",   # about the movie
+    "படத்தோடையும்": "படத்தோடு",       # with the movie
+    "கொண்டாட்டமாம்": "கொண்டாட்டம்",   # celebration
+    "பண்ண்டுக்கிறார்": "பண்ணிக்கொண்டிருக்கிறார்", # doing (continuous)
+    "பண்ண்டுக்கிறார்கள்": "பண்ணிக்கொண்டிருக்கிறார்கள்", # doing (plural)
+    "தரிப்புடமாக": "திறமையாக",        # skillfully
+    "விச்சபத்துக்": "விஷயத்துக்கு",   # for the matter
+    "கணைசியாம்": "கடைசியாம்",          # lastly
+    "சிருக்குத்தையில்லாம்": "சிரிக்குதையில்லாம்", # without laughing
+    "நுங்களுடை": "உங்களுடைய",         # your
+    "முனித்து": "மினிட்டு",            # minute
     # --- NEW BATCH FROM USER ---
     "அப்டியினா": "அப்படி என்றால்",
     "அப்டியினு": "அப்படி என்று",

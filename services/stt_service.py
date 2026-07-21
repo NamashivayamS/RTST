@@ -57,7 +57,7 @@ from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR
 
 # Default beam sizes for transcription
 STT_BEAM_SIZE = 2        # primary model (English detection)
-STT_BEAM_SIZE_TAMIL = 1  # Tamil fine-tune (greedy is sufficient)
+STT_BEAM_SIZE_TAMIL = 3  # Tamil fine-tune (beam search for accuracy)
 
 class STTService:
     """
@@ -278,6 +278,12 @@ class STTService:
 
         # Clean up any residual prompt leakage or common repetitive hallucinations
         full_text = re.sub(r'(?i)^(?:hello[.,\s]*|வணக்கம்[.,\s]*)+', '', full_text).strip()
+
+        # ── Phrase-level repetition deduplication ──────────────────────────
+        # Whisper sometimes repeats a multi-word phrase many times (e.g.,
+        # "கலியிஸ் செய்தார் கலியிஸ் செய்தார் கலியிஸ் செய்தார்").
+        # Collapse any phrase of 2-6 words that repeats 3+ times consecutively.
+        full_text = re.sub(r'((?:\S+\s+){1,5}\S+?)(?:\s+\1){2,}', r'\1', full_text).strip()
 
         # Repetition hallucination check
         words = full_text.split()
