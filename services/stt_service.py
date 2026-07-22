@@ -57,7 +57,7 @@ from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR
 
 # Default beam sizes for transcription
 STT_BEAM_SIZE = 2        # primary model (English detection)
-STT_BEAM_SIZE_TAMIL = 3  # Tamil fine-tune (beam search for accuracy)
+STT_BEAM_SIZE_TAMIL = 5 # Tamil fine-tune (beam search for accuracy)
 
 class STTService:
     """
