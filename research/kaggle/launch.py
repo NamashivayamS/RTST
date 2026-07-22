@@ -206,6 +206,21 @@ def main():
         else:
             print("[!] Warn: No CTranslate2 model folder (containing model.bin) found in /kaggle/input.", flush=True)
 
+    # Load additional env variables from configs/kaggle.env if present
+    kaggle_env_path = os.path.join(script_dir, "configs", "kaggle.env")
+    if os.path.exists(kaggle_env_path):
+        print(f"[*] Loading environment variables from {kaggle_env_path}...", flush=True)
+        with open(kaggle_env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    k_str = key.strip()
+                    v_str = val.strip().strip("'\"")
+                    os.environ[k_str] = v_str
+
     # 1. Set up cloudflared binary
     cloudflared_bin = setup_cloudflared()
 
