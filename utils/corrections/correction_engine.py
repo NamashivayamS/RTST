@@ -91,8 +91,12 @@ def generate_tamil_number_map():
             # Space or direct concat
             num_map[f"{base_std} {ones[i]}"] = ten_mult + i
             num_map[f"{base_std}{ones[i]}"] = ten_mult + i
+            num_map[f"{base_alt} {ones_alt[i]}"] = ten_mult + i
             num_map[f"{base_alt}{ones_alt[i]}"] = ten_mult + i
+            num_map[f"{base_std} {ones_alt[i]}"] = ten_mult + i
             num_map[f"{base_std}{ones_alt[i]}"] = ten_mult + i
+            num_map[f"{base_alt} {ones[i]}"] = ten_mult + i
+            num_map[f"{base_alt}{ones[i]}"] = ten_mult + i
             
             # Sandhi combinations (e.g. இருபத்தொன்று, இருபத்தெட்டு, அறுபத்தெட்டு)
             sandhi_map = {
@@ -113,6 +117,15 @@ def generate_tamil_number_map():
             for s_word in sandhi_map[i]:
                 num_map[f"{base_t}{s_word}"] = ten_mult + i
                 
+    # Generate ordinal variants for all numbers ending with 'ு' (\u0bc1)
+    # This transforms e.g. ரெண்டு (2) -> ரெண்டாம் (2nd), ரெண்டாவது (2nd)
+    ordinals = {}
+    for k, v in num_map.items():
+        if k.endswith('\u0bc1'):
+            ordinals[k[:-1] + '\u0bbe\u0bae\u0bcd'] = v      # 'ாம்' suffix
+            ordinals[k[:-1] + '\u0bbe\u0bb5\u0ba4\u0bc1'] = v  # 'ாவது' suffix
+            
+    num_map.update(ordinals)
     return num_map
 
 TAMIL_NUM_MAP = generate_tamil_number_map()
@@ -183,29 +196,77 @@ def has_preceding_number(match):
 def replace_1900(match):
     if has_preceding_number(match):
         return match.group(0)
-    suffix = match.group(1)
-    if not suffix:
+    suffix_str = match.group(1)
+    if not suffix_str:
         return "1900"
-    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
-    return str(1900 + val)
+    val = TAMIL_NUM_MAP.get(suffix_str.strip(), 0)
+    year = 1900 + val
+    
+    # Validation checks
+    if year < 1900 or year > 2099:
+        return match.group(0) # Out of target range, return unmodified
+        
+    if year > 2000 and (year % 100) == 0 and year != 2000:
+        return match.group(0) # Rejects e.g. "2100", "2200", etc. which may just be "2100 rupees"
+        
+    # Preserve ordinal endings if present in the matched string
+    ordinal_suffix = ""
+    if suffix_str and suffix_str.endswith('\u0bbe\u0bae\u0bcd'):  # "ாம்"
+        ordinal_suffix = "ஆம்"
+    elif suffix_str and suffix_str.endswith('\u0bbe\u0bb5\u0ba4\u0bc1'):  # "ாவது"
+        ordinal_suffix = "ஆவது"
+        
+    return f"{year}{ordinal_suffix}"
 
 def replace_2000(match):
     if has_preceding_number(match):
         return match.group(0)
-    suffix = match.group(1)
-    if not suffix:
+    suffix_str = match.group(1)
+    if not suffix_str:
         return "2000"
-    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
-    return str(2000 + val)
+    val = TAMIL_NUM_MAP.get(suffix_str.strip(), 0)
+    year = 2000 + val
+    
+    # Validation checks
+    if year < 1900 or year > 2099:
+        return match.group(0) # Out of target range, return unmodified
+        
+    if year > 2000 and (year % 100) == 0 and year != 2000:
+        return match.group(0) # Rejects e.g. "2100", "2200", etc. which may just be "2100 rupees"
+        
+    # Preserve ordinal endings if present in the matched string
+    ordinal_suffix = ""
+    if suffix_str and suffix_str.endswith('\u0bbe\u0bae\u0bcd'):  # "ாம்"
+        ordinal_suffix = "ஆம்"
+    elif suffix_str and suffix_str.endswith('\u0bbe\u0bb5\u0ba4\u0bc1'):  # "ாவது"
+        ordinal_suffix = "ஆவது"
+        
+    return f"{year}{ordinal_suffix}"
 
 def replace_eng_2000(match):
     if has_preceding_number(match):
         return match.group(0)
-    suffix = match.group(1)
-    if not suffix:
+    suffix_str = match.group(1)
+    if not suffix_str:
         return "2000"
-    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
-    return str(2000 + val)
+    val = TAMIL_NUM_MAP.get(suffix_str.strip(), 0)
+    year = 2000 + val
+    
+    # Validation checks
+    if year < 1900 or year > 2099:
+        return match.group(0) # Out of target range, return unmodified
+        
+    if year > 2000 and (year % 100) == 0 and year != 2000:
+        return match.group(0) # Rejects e.g. "2100", "2200", etc. which may just be "2100 rupees"
+        
+    # Preserve ordinal endings if present in the matched string
+    ordinal_suffix = ""
+    if suffix_str and suffix_str.endswith('\u0bbe\u0bae\u0bcd'):  # "ாம்"
+        ordinal_suffix = "ஆம்"
+    elif suffix_str and suffix_str.endswith('\u0bbe\u0bb5\u0ba4\u0bc1'):  # "ாவது"
+        ordinal_suffix = "ஆவது"
+        
+    return f"{year}{ordinal_suffix}"
 
 def normalize_tamil_years(text: str) -> str:
     text = PATTERN_1900.sub(replace_1900, text)
