@@ -117,59 +117,100 @@ def generate_tamil_number_map():
 
 TAMIL_NUM_MAP = generate_tamil_number_map()
 
+# Specific prefixes of number words (including scales) to prevent partial year corruption
+NUMBER_PREFIXES = {
+    "ஒன்று", "ஒன்னு", "ஒன்",
+    "இரண்டு", "இரண்ட", "ரெண்டு", "ரெண்ட", "டூ",
+    "மூன்று", "மூணு", "திரீ", "முப்ப",
+    "நான்கு", "நாலு", "போர்", "நாற்ப", "நாப்ப",
+    "ஐந்து", "அஞ்சு", "பைவ்", "ஐம்ப",
+    "ஆறு", "சிக்ஸ்", "அறுப",
+    "ஏழு", "செவன்", "எழுப",
+    "எட்டு", "எய்ட்", "எண்ப",
+    "ஒன்பது", "ஒம்பது", "நைன்", "தொண்ணூ",
+    "பத்து", "பதின", "பன்னெ", "பன்னிர", "லெவன்", "டுவெல்", "தர்ட்டீ", "போர்்ட்டீ", "பிப்டீ", "சிக்ஸ்டீ", "செவண்டீ", "எய்ட்டீ", "நைண்டீ",
+    "இருப", "இருபத்",
+    "நூறு", "நூற்", "நூறி",
+    "ஆயி", "தொள்ளாயி", "தொளாயி",
+    "லட்ச", "இலட்ச", "கோடி"
+}
+
+BLOCKED_NUM_PATTERN = (
+    r'(?:' + "|".join(re.escape(w) for w in NUMBER_PREFIXES) + r')'
+)
+
+# Sort suffixes by length descending to match longest-first
+sorted_suffix_keys = sorted(TAMIL_NUM_MAP.keys(), key=len, reverse=True)
+TAMIL_SUFFIX_PATTERN = "|".join(re.escape(k) for k in sorted_suffix_keys)
+
+# Define prefixes for 1900s
+PREFIX_1900_PATTERN = r'(?<!' + WORD_CHARS + r')(?:ஆயிரத்து\s+)?(?:தொள்ளாயிரத்து|தொள்ளாயிரம்|தொளாயிரத்து|தொளாயிரம்|தொளாயிறத்து|தொள்ளாயிறத்து)(?!' + WORD_CHARS + r')'
+# Define prefixes for 2000s
+PREFIX_2000_PATTERN = r'(?<!' + WORD_CHARS + r')(?:இரண்டாயிரத்து|இரண்டாயிரம்|ரெண்டாயிரத்து|ரெண்டாயிரம்|ரெண்டாயிரத்தி|இரண்டாயிரத்தி)(?!' + WORD_CHARS + r')'
+# English transliterated 2000s
+ENGLISH_2000_PATTERN = r'(?<!' + WORD_CHARS + r')டூ\s+(?:தௌசண்ட்|தௌசன்|தௌசந்த்|தவுசண்ட்|தவுசன்|தவுசந்த்)(?!' + WORD_CHARS + r')'
+
+# Compile the patterns at module level using the all-or-nothing logic with lookahead
+PATTERN_1900 = re.compile(
+    r'(?:' + PREFIX_1900_PATTERN + r'\s+(' + TAMIL_SUFFIX_PATTERN + r')(?!' + WORD_CHARS + r')|' +
+    PREFIX_1900_PATTERN + r'(?!\s+' + BLOCKED_NUM_PATTERN + r'))',
+    re.IGNORECASE
+)
+
+PATTERN_2000 = re.compile(
+    r'(?:' + PREFIX_2000_PATTERN + r'\s+(' + TAMIL_SUFFIX_PATTERN + r')(?!' + WORD_CHARS + r')|' +
+    PREFIX_2000_PATTERN + r'(?!\s+' + BLOCKED_NUM_PATTERN + r'))',
+    re.IGNORECASE
+)
+
+PATTERN_ENG_2000 = re.compile(
+    r'(?:' + ENGLISH_2000_PATTERN + r'\s+(' + TAMIL_SUFFIX_PATTERN + r')(?!' + WORD_CHARS + r')|' +
+    ENGLISH_2000_PATTERN + r'(?!\s+' + BLOCKED_NUM_PATTERN + r'))',
+    re.IGNORECASE
+)
+
+def has_preceding_number(match):
+    full_text = match.string
+    preceding = full_text[:match.start()].strip()
+    if preceding:
+        last_word = preceding.split()[-1]
+        # Scales used in numbers (independent U+0B86 and dependent U+0BBE variants)
+        scales = {"நூறு", "நூற்று", "நூற்றி", "ஆயிரம்", "ஆயிரத்து", "லட்ச", "இலட்ச", "கோடி"}
+        if any(last_word.endswith(w) for w in scales) or any(last_word.startswith(p) for p in NUMBER_PREFIXES):
+            return True
+    return False
+
+def replace_1900(match):
+    if has_preceding_number(match):
+        return match.group(0)
+    suffix = match.group(1)
+    if not suffix:
+        return "1900"
+    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
+    return str(1900 + val)
+
+def replace_2000(match):
+    if has_preceding_number(match):
+        return match.group(0)
+    suffix = match.group(1)
+    if not suffix:
+        return "2000"
+    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
+    return str(2000 + val)
+
+def replace_eng_2000(match):
+    if has_preceding_number(match):
+        return match.group(0)
+    suffix = match.group(1)
+    if not suffix:
+        return "2000"
+    val = TAMIL_NUM_MAP.get(suffix.strip(), 0)
+    return str(2000 + val)
+
 def normalize_tamil_years(text: str) -> str:
-    # Define prefixes for 1900s
-    prefix_1900_pattern = r'(?<!' + WORD_CHARS + r')(?:ஆயிரத்து\s+)?(?:தொள்ளாயிரத்து|தொள்ளாயிரம்|தொளாயிரத்து|தொளாயிரம்|தொளாயிறத்து|தொள்ளாயிறத்து)(?!' + WORD_CHARS + r')'
-    # Define prefixes for 2000s
-    prefix_2000_pattern = r'(?<!' + WORD_CHARS + r')(?:இரண்டாயிரத்து|இரண்டாயிரம்|ரெண்டாயிரத்து|ரெண்டாயிரம்|ரெண்டாயிரத்தி|இரண்டாயிரத்தி)(?!' + WORD_CHARS + r')'
-    
-    def parse_suffix_value(suffix_str: str) -> int:
-        if not suffix_str:
-            return 0
-        suffix_str = suffix_str.strip()
-        return TAMIL_NUM_MAP.get(suffix_str, 0)
-
-    # Match 1900s
-    pattern_1900 = re.compile(prefix_1900_pattern + r'(?:\s+([^\s]+))?', re.IGNORECASE)
-    
-    def replace_1900(match):
-        suffix = match.group(1)
-        if not suffix:
-            return "1900"
-        val = parse_suffix_value(suffix)
-        if val > 0:
-            return str(1900 + val)
-        return "1900 " + suffix
-
-    # Match 2000s
-    pattern_2000 = re.compile(prefix_2000_pattern + r'(?:\s+([^\s]+))?', re.IGNORECASE)
-    
-    def replace_2000(match):
-        suffix = match.group(1)
-        if not suffix:
-            return "2000"
-        val = parse_suffix_value(suffix)
-        if val > 0:
-            return str(2000 + val)
-        return "2000 " + suffix
-
-    # Handle basic English year transliterations in Tamil script
-    # e.g., "டூ தௌசண்ட் ஒன்"
-    english_2000_pattern = r'(?<!' + WORD_CHARS + r')டூ\s+(?:தௌசண்ட்|தௌசன்|தௌசந்த்|தவுசண்ட்|தவுசன்|தவுசந்த்)(?!' + WORD_CHARS + r')'
-    pattern_eng_2000 = re.compile(english_2000_pattern + r'(?:\s+([^\s]+))?', re.IGNORECASE)
-    
-    def replace_eng_2000(match):
-        suffix = match.group(1)
-        if not suffix:
-            return "2000"
-        val = parse_suffix_value(suffix)
-        if val > 0:
-            return str(2000 + val)
-        return "2000 " + suffix
-
-    text = pattern_1900.sub(replace_1900, text)
-    text = pattern_2000.sub(replace_2000, text)
-    text = pattern_eng_2000.sub(replace_eng_2000, text)
+    text = PATTERN_1900.sub(replace_1900, text)
+    text = PATTERN_2000.sub(replace_2000, text)
+    text = PATTERN_ENG_2000.sub(replace_eng_2000, text)
     
     # Normalize 2.0 / two point zero
     text = re.sub(r'(?<!' + WORD_CHARS + r')டூ\s+பாயிண்ட்\s+(?:ஒரு|ஜீரோ|ஓ|ஒன்பது)(?!' + WORD_CHARS + r')', '2.0', text)
