@@ -147,7 +147,13 @@ class STTService:
                 beam_size=self.beam_size_tamil,
                 language="ta",
                 initial_prompt=initial_prompt,
-                vad_filter=False,            # Already validated by streaming VAD
+                vad_filter=True,
+                vad_parameters=dict(
+                    threshold=0.5,
+                    min_speech_duration_ms=150,
+                    min_silence_duration_ms=1500,
+                    speech_pad_ms=300,
+                ),
                 condition_on_previous_text=False,
                 temperature=0.0,
                 repetition_penalty=1.2,
@@ -161,7 +167,13 @@ class STTService:
                 beam_size=self.beam_size,
                 language=lang_arg,
                 initial_prompt=initial_prompt,
-                vad_filter=False,            # Already validated by streaming VAD
+                vad_filter=True,
+                vad_parameters=dict(
+                    threshold=0.5,
+                    min_speech_duration_ms=150,
+                    min_silence_duration_ms=1500,
+                    speech_pad_ms=300,
+                ),
                 condition_on_previous_text=False,
                 temperature=0.0,
                 repetition_penalty=1.2,
@@ -182,7 +194,13 @@ class STTService:
                     beam_size=self.beam_size_tamil,
                     language="ta",
                     initial_prompt=initial_prompt,
-                    vad_filter=False,            # Already validated by streaming VAD
+                    vad_filter=True,
+                    vad_parameters=dict(
+                        threshold=0.5,
+                        min_speech_duration_ms=150,
+                        min_silence_duration_ms=1500,
+                        speech_pad_ms=300,
+                    ),
                     condition_on_previous_text=False,
                     temperature=0.0,
                     repetition_penalty=1.2,
@@ -224,9 +242,10 @@ class STTService:
                 initial_prompt=initial_prompt,
                 vad_filter=True,
                 vad_parameters=dict(
-                    min_silence_duration_ms=400,
-                    speech_pad_ms=100,
-                    min_speech_duration_ms=200,
+                    threshold=0.5,
+                    min_speech_duration_ms=150,
+                    min_silence_duration_ms=1500,
+                    speech_pad_ms=300,
                 ),
                 condition_on_previous_text=False,
                 temperature=0.2,   # add slight randomness to escape local optima
@@ -337,7 +356,13 @@ class STTService:
                     audio_input,
                     beam_size=self.beam_size,
                     language="en",
-                    vad_filter=False,
+                    vad_filter=True,
+                    vad_parameters=dict(
+                        threshold=0.5,
+                        min_speech_duration_ms=150,
+                        min_silence_duration_ms=1500,
+                        speech_pad_ms=300,
+                    ),
                     condition_on_previous_text=False,
                     temperature=0.0,
                 )
