@@ -313,6 +313,12 @@ class STTService:
         # Collapse any phrase of 2-6 words that repeats 3+ times consecutively.
         full_text = re.sub(r'((?:\S+\s+){1,5}\S+?)(?:\s+\1){2,}', r'\1', full_text).strip()
 
+        # ── Character/Syllable-level stutter deduplication ───────────────
+        # Whisper turbo often gets stuck in infinite syllable loops in Indic scripts
+        # e.g., "దందందందందందందందందం" or "ക്ക്ക്ക്ക്ക്ക്ക്ക്ക്ക്ക്"
+        # Collapse any 1-5 character sequence that repeats 5+ times consecutively.
+        full_text = re.sub(r'(.{1,5}?)\1{5,}', r'\1', full_text).strip()
+
         # Repetition hallucination check
         words = full_text.split()
         if len(words) >= 6:
