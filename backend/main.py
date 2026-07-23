@@ -728,18 +728,12 @@ async def websocket_translate(websocket: WebSocket):
                         state.detected_language_lock = ""
                         logger.info("[Config] source_lang → %s", state.source_lang)
                         # Set language-specific vocabulary prompt for Whisper.
-                        # Only applied when the user explicitly selects a language,
-                        # NOT in auto-detect mode (source_lang="") to prevent hallucinations.
-                        if state.source_lang == "ta":
-                            state._stt_domain_seed = (
-                                "வணக்கம், இது தமிழில் பேச்சு. "
-                                "வருடங்கள், திரைப்படம், இயக்குநர், நிகழ்ச்சி, "
-                                "தொழில்நுட்பம், பொருளாதாரம், கல்வி, விளையாட்டு, "
-                                "விண்வெளி, அறிவியல் புனைகதை, ஸ்டான்லி குப்ரிக், "
-                                "ஆர்தர் சி கிளார்க், சென்டினல், இரண்டாயிரத்து ஒன்று."
-                            )
-                        else:
-                            state._stt_domain_seed = ""
+                        # Driven by LANGUAGE_REGISTRY — auto-provides the correct
+                        # native-script seed for any supported language.
+                        # When source_lang="" (auto-detect), returns "" (no seed).
+                        from config import LANGUAGE_REGISTRY
+                        lang_entry = LANGUAGE_REGISTRY.get(state.source_lang, {})
+                        state._stt_domain_seed = lang_entry.get("domain_seed", "")
                         state.stt_context = state._stt_domain_seed
                     if "environment" in ctrl:
                         preset = ENVIRONMENT_PRESETS.get(ctrl["environment"])

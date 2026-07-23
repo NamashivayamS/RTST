@@ -101,6 +101,54 @@ SERVER_PUBLIC_KEY_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_public.key")
 )
 
+# ── Language Registry ─────────────────────────────────────────────────────────
+# Single source of truth for all supported languages.
+# To add a new language, add ONE entry here. Zero code changes elsewhere.
+LANGUAGE_REGISTRY = {
+    "ta": {
+        "name": "Tamil",
+        "script_range": (0x0B80, 0x0BFF),
+        "indictrans": "tam_Taml",
+        "domain_seed": (
+            "வணக்கம், இது தமிழில் பேச்சு. "
+            "வருடங்கள், திரைப்படம், இயக்குநர், நிகழ்ச்சி, "
+            "தொழில்நுட்பம், பொருளாதாரம், கல்வி, விளையாட்டு, "
+            "விண்வெளி, அறிவியல் புனைகதை, ஸ்டான்லி குப்ரிக், "
+            "ஆர்தர் சி கிளார்க், சென்டினல், இரண்டாயிரத்து ஒன்று."
+        ),
+    },
+    "hi": {
+        "name": "Hindi",
+        "script_range": (0x0900, 0x097F),
+        "indictrans": "hin_Deva",
+        "domain_seed": "नमस्ते, यह हिंदी में बातचीत है। बैठक, कंपनी, उत्पादन, विपणन, बिक्री, प्रबंधन।",
+    },
+    "te": {
+        "name": "Telugu",
+        "script_range": (0x0C00, 0x0C7F),
+        "indictrans": "tel_Telu",
+        "domain_seed": "నమస్తే, ఇది తెలుగులో సంభాషణ. సమావేశం, ఉత్పత్తి, మార్కెటింగ్, నిర్వహణ.",
+    },
+    "ml": {
+        "name": "Malayalam",
+        "script_range": (0x0D00, 0x0D7F),
+        "indictrans": "mal_Mlym",
+        "domain_seed": "നമസ്കാരം, ഇത് മലയാളത്തിലുള്ള സംഭാഷണമാണ്. മീറ്റിംഗ്, ഉൽപ്പാദനം, വിപണനം, മാനേജ്മെന്റ്.",
+    },
+    "kn": {
+        "name": "Kannada",
+        "script_range": (0x0C80, 0x0CFF),
+        "indictrans": "kan_Knda",
+        "domain_seed": "ನಮಸ್ಕಾರ, ಇದು ಕನ್ನಡದಲ್ಲಿ ಮಾತುಕತೆ. ಸಭೆ, ಉತ್ಪಾದನೆ, ಮಾರುಕಟ್ಟೆ, ನಿರ್ವಹಣೆ.",
+    },
+    "en": {
+        "name": "English",
+        "script_range": None,   # No validation needed for English
+        "indictrans": "eng_Latn",
+        "domain_seed": "",
+    },
+}
+
 # ── Production safety check ───────────────────────────────────────────────────
 # When ENVIRONMENT=production, crash on startup if critical secrets are missing.
 # This ensures the company server never runs with dev fallback credentials.

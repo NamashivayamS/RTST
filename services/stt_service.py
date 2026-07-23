@@ -53,7 +53,16 @@ def _is_hallucination(text: str) -> bool:
     return any(r.match(t) for r in _HALLUCINATION_RE)
 
 
-from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR
+from config import STT_NO_SPEECH_THRESHOLD, STT_LANG_CONFIDENCE_FLOOR, LANGUAGE_REGISTRY
+
+
+def _get_script_ratio(text: str, script_range: tuple) -> float:
+    """Returns the fraction of characters in text within the given Unicode range."""
+    if not script_range or not text:
+        return 0.0
+    lo, hi = script_range
+    script_chars = sum(1 for ch in text if lo <= ord(ch) <= hi)
+    return script_chars / max(len(text), 1)
 
 # Default beam sizes for transcription
 STT_BEAM_SIZE = 2        # primary model (English detection)
@@ -330,22 +339,49 @@ class STTService:
             f"Prob={lang_prob:.2%}"
         )
 
-        # Whisper often confuses Tamil with Malayalam/Kannada/Telugu.
-        # Check if output text is actually Tamil script regardless of detected language
-        if detected_lang != "ta" and detected_lang != "en":
-            tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
-            tamil_ratio = tamil_chars / max(len(full_text), 1)
-            
-            if tamil_ratio > 0.3:
-                print(f"[STT] Tamil script detected in '{detected_lang}' output — reclassifying to 'ta'")
-                detected_lang = "ta"
-                
-        # If detected as Hindi but text has no Devanagari — Whisper echoed English prompt
-        if detected_lang == "hi":
-            deva_chars = sum(1 for ch in full_text if '\u0900' <= ch <= '\u097F')
-            if deva_chars == 0:
-                print(f"[STT] Hindi detected but no Devanagari script — reclassifying to 'en'")
-                detected_lang = "en"
+        # ── Universal Script Validation (forced language) ─────────────────
+        # If user explicitly selected a non-English Indic language, verify
+        # that Whisper's output actually contains the expected native script.
+        # If not, it means Whisper transliterated into Latin → reclassify.
+        if force_language and force_language != "en" and force_language in LANGUAGE_REGISTRY:
+            expected = LANGUAGE_REGISTRY[force_language]
+            sr = expected.get("script_range")
+            if sr:
+                native_ratio = _get_script_ratio(full_text, sr)
+                if native_ratio < 0.15:
+                    print(
+                        f"[STT] Script mismatch: forced '{force_language}' "
+                        f"({expected['name']}) but only {native_ratio:.0%} "
+                        f"native script — reclassifying to 'en'"
+                    )
+                    detected_lang = "en"
+                else:
+                    # Script matches → trust the user's explicit selection
+                    detected_lang = force_language
+        else:
+            # Auto-detect mode OR forced English:
+            # Rescue misidentified scripts (e.g., Whisper says "ml" but text is Tamil)
+            if detected_lang not in ("en",) and detected_lang in LANGUAGE_REGISTRY:
+                expected = LANGUAGE_REGISTRY[detected_lang]
+                sr = expected.get("script_range")
+                if sr and _get_script_ratio(full_text, sr) < 0.15:
+                    # Whisper's detected language doesn't match the script.
+                    # Scan all other languages for a match.
+                    rescued = False
+                    for lc, li in LANGUAGE_REGISTRY.items():
+                        if lc in ("en", detected_lang):
+                            continue
+                        sr2 = li.get("script_range")
+                        if sr2 and _get_script_ratio(full_text, sr2) > 0.3:
+                            print(f"[STT] {li['name']} script detected in "
+                                  f"'{detected_lang}' output — reclassifying to '{lc}'")
+                            detected_lang = lc
+                            rescued = True
+                            break
+                    if not rescued:
+                        print(f"[STT] No native script in '{detected_lang}' output "
+                              f"— reclassifying to 'en'")
+                        detected_lang = "en"
 
         # If language is still unsupported, check confidence before falling back
         if detected_lang not in WHISPER_LANG_TO_INDICTRANS:
@@ -395,20 +431,17 @@ class STTService:
                 is_tanglish = True
                 print(f"[STT] Tanglish detected in: '{full_text}'")
         elif detected_lang == "en":
-            # NEW: check if the text is actually Tamil script despite English detection
-            tamil_chars = sum(1 for ch in full_text if '\u0B80' <= ch <= '\u0BFF')
-            tamil_ratio = tamil_chars / max(len(full_text), 1)
-            
-            # Check for Devanagari (Hindi)
-            deva_chars = sum(1 for ch in full_text if '\u0900' <= ch <= '\u097F')
-            deva_ratio = deva_chars / max(len(full_text), 1)
-            
-            if tamil_ratio > 0.5:   # majority Tamil characters
-                print(f"[STT] Tamil script detected in 'en' output — reclassifying to 'ta'")
-                detected_lang = "ta"
-            elif deva_ratio > 0.5:
-                print(f"[STT] Devanagari script detected in 'en' output — reclassifying to 'hi'")
-                detected_lang = "hi"
+            # Rescue: Whisper labeled output as English, but the text
+            # may actually be in a native Indic script. Scan all languages.
+            for lc, li in LANGUAGE_REGISTRY.items():
+                if lc == "en":
+                    continue
+                sr = li.get("script_range")
+                if sr and _get_script_ratio(full_text, sr) > 0.3:
+                    print(f"[STT] {li['name']} script detected in 'en' "
+                          f"output — reclassifying to '{lc}'")
+                    detected_lang = lc
+                    break
 
         indictrans_lang = WHISPER_LANG_TO_INDICTRANS.get(detected_lang)
 
