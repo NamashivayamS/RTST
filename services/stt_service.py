@@ -308,10 +308,10 @@ class STTService:
         full_text = re.sub(r'(?i)^(?:hello[.,\s]*|வணக்கம்[.,\s]*)+', '', full_text).strip()
 
         # ── Phrase-level repetition deduplication ──────────────────────────
-        # Whisper sometimes repeats a multi-word phrase many times (e.g.,
-        # "கலியிஸ் செய்தார் கலியிஸ் செய்தார் கலியிஸ் செய்தார்").
-        # Collapse any phrase of 2-6 words that repeats 3+ times consecutively.
-        full_text = re.sub(r'((?:\S+\s+){1,5}\S+?)(?:\s+\1){2,}', r'\1', full_text).strip()
+        # Whisper sometimes repeats a word or phrase many times (e.g.,
+        # "సంభాషండింగులో సంభాషండింగులో సంభాషండింగులో" or multi-word phrases).
+        # Collapse any phrase of 1-6 words that repeats 3+ times consecutively.
+        full_text = re.sub(r'((?:\S+\s+){0,5}\S+?)(?:\s+\1){2,}', r'\1', full_text).strip()
 
         # ── Character/Syllable-level stutter deduplication ───────────────
         # Whisper turbo often gets stuck in infinite syllable loops in Indic scripts
