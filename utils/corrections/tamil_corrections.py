@@ -2,6 +2,7 @@ TAMIL_CORRECTIONS = {
     # --- Whisper-specific Tamil transcription errors ---
     # These are systematic errors where Whisper consistently misspells
     # common Tamil words. Identified from production logs.
+
     "வரணங்கள்": "வருடங்கள்",          # years
     "வரணங்களை": "வருடங்களை",          # years (accusative)
     "வரணங்களுக்கு": "வருடங்களுக்கு",  # years (dative)
@@ -111,6 +112,7 @@ TAMIL_CORRECTIONS = {
     "கிராமப்பர்": "கிராமப்புற",
     "சவுண்ட் பைட்": "sound bite",
     "மீட்": "மிட்",
+    "தெரோபோர்": "திருப்பூர்",
     "திருப்பூசத்தி": "திருப்பூர் சுத்தி",
     "திருப்பூசத்திரத்துக்குரிய": "திருப்பூர் சுற்றியுள்ள",
     "திருப்பத்தூர்": "திருப்பூர்",
