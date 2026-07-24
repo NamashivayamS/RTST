@@ -41,9 +41,12 @@ print("=========================================================")
 print("\n1. Pre-downloading Silero VAD...")
 silero_vad.load_silero_vad()
 
-print("\n2. Pre-downloading Faster-Whisper 'medium' model...")
-# This downloads and caches the model weights inside the standard Hugging Face cache
-medium_dir = snapshot_download("Systran/faster-whisper-medium")
+from config import PRIMARY_WHISPER_MODEL
+from faster_whisper import download_model
+
+print(f"\n2. Pre-downloading Faster-Whisper primary model ('{PRIMARY_WHISPER_MODEL}')...")
+# This downloads and caches the model weights using Faster-Whisper's own resolution logic
+primary_dir = download_model(PRIMARY_WHISPER_MODEL)
 
 print("\n3. Pre-downloading SpeechBrain Speaker ID Classifier...")
 classifier = EncoderClassifier.from_hparams(

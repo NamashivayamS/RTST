@@ -8,7 +8,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # RTX 3050 supports FP16, so this is safe. Falls back to int8 on CPU.
 COMPUTE_TYPE = "int8_float16" if DEVICE == "cuda" else "int8"
 
-PRIMARY_MODEL = "large-v3-turbo"
+from config import PRIMARY_WHISPER_MODEL as PRIMARY_MODEL
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TAMIL_MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "whisper-tamil-medium-ct2")
 
@@ -38,13 +38,13 @@ try:
         preprocessor_path = os.path.join(TAMIL_MODEL_PATH, "preprocessor_config.json")
         if not os.path.exists(preprocessor_path):
             try:
-                from huggingface_hub import snapshot_download
+                from faster_whisper import download_model
                 import shutil
-                medium_dir = snapshot_download("Systran/faster-whisper-medium", local_files_only=True)
+                primary_dir = download_model(PRIMARY_MODEL, local_files_only=True)
                 for filename in ["tokenizer.json", "preprocessor_config.json"]:
                     dst_file = os.path.join(TAMIL_MODEL_PATH, filename)
                     if not os.path.exists(dst_file):
-                        src_file = os.path.join(medium_dir, filename)
+                        src_file = os.path.join(primary_dir, filename)
                         if os.path.exists(src_file):
                             shutil.copy(src_file, dst_file)
                             print(f"Copied missing config {filename} to {TAMIL_MODEL_PATH} offline.")

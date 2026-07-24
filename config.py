@@ -9,6 +9,10 @@ load_dotenv()
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
+# ── Primary Whisper Model (Single Source of Truth) ────────────────────────────
+# Both download_models.py (build) and whisper_model.py (runtime) import this.
+PRIMARY_WHISPER_MODEL = "large-v3-turbo"
+
 # ── Streaming / VAD thresholds ────────────────────────────────────────────────
 SAMPLE_RATE          = 16000
 VAD_SILENCE_SEC      = 0.7    # seconds of silence before utterance fires
