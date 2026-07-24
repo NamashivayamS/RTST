@@ -889,6 +889,7 @@ async def websocket_translate(websocket: WebSocket):
                                 pass
                             else:
                                 state.detected_language_lock = ""
+                                state._stt_domain_seed = ""
                             state.stt_context = state._stt_domain_seed
                             state.language_divergence_count = 0
                         if state.translation_window:
@@ -1099,6 +1100,7 @@ async def _run_pipeline(
                 if state.language_divergence_count >= 2:
                     pl_logger.warning("[Pipeline] Breaking language lock to force re-detection.")
                     state.detected_language_lock = ""
+                    state._stt_domain_seed = ""
                     state.language_divergence_count = 0
             else:
                 state.language_divergence_count = 0
@@ -1109,7 +1111,13 @@ async def _run_pipeline(
                 and src_lang in ("ta", "en", "hi", "te", "kn", "ml")
                 and not state.detected_language_lock):
             state.detected_language_lock = src_lang
-            pl_logger.info("[Pipeline] Language lock set: %s", state.detected_language_lock)
+            # Load the domain seed for the locked language so that turn-taking
+            # resets (stt_context = _stt_domain_seed) still leave Whisper with
+            # a native-script anchor prompt instead of an empty string.
+            from config import LANGUAGE_REGISTRY
+            locked_entry = LANGUAGE_REGISTRY.get(src_lang, {})
+            state._stt_domain_seed = locked_entry.get("domain_seed", "")
+            pl_logger.info("[Pipeline] Language lock set: %s (domain seed loaded)", state.detected_language_lock)
 
         text_for_context = result.get("cleaned_text", "").strip() or result.get("raw_text", "").strip()
         words = text_for_context.split()
